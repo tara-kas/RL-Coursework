@@ -31,6 +31,10 @@ class Window():
         for event in events:
             if event.type == pygame.QUIT:
                 self.shutdown()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    pygame.quit()
+                    exit()
   
         self.scenes[self.current_scene].handle_events(events)
 
