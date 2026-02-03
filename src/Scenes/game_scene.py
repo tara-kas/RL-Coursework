@@ -54,9 +54,11 @@ class GameScene(Scene):
                     grid_x = int((self.mouse_x - self.top_x) // self.tile_size)
                     grid_y = int((self.mouse_y - self.top_y) // self.tile_size)
                     
-                    if 0 <= grid_x < self.grid_x and 0 <= grid_y < self.grid_y:
-                        self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
-                        self.game_logic.next_turn()
+                    if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
+                        continue
+                    
+                    self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
+                    self.game_logic.next_turn()
 
     def update(self):
         pass
