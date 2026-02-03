@@ -1,6 +1,7 @@
 import pygame
 import math
 import numpy as np
+import random
 
 from src.Scenes.scene import Scene
 from src.scene_manager import SceneManager
@@ -12,7 +13,7 @@ class GameScene(Scene):
         
         self.padding_x_L = 20
         self.padding_x_R = 20
-        self.padding_y_T = 20
+        self.padding_y_T = 60
         self.padding_y_B = 20
         
         screen_width, screen_height = scene_manager.screen.get_size()
@@ -37,6 +38,10 @@ class GameScene(Scene):
         background_tile = pygame.image.load("assets/textures/background.png")
         self.background_tile = pygame.transform.scale(background_tile, (math.ceil(tile_size), math.ceil(tile_size)))
 
+        self.users = [{"type": "player", "name": "Test Player"}, {"type": "bot", "name": "Test Bot"}]
+
+        self.current_turn = random.randint(0, len(self.users) - 1)
+
     def handle_events(self, events: list[pygame.event.Event]):
         pass
 
@@ -46,6 +51,7 @@ class GameScene(Scene):
     def draw(self):
         self.draw_background()
         self.draw_entities()
+        self.draw_ui()
 
     def draw_background(self):
         #Draw tiled background
@@ -67,3 +73,26 @@ class GameScene(Scene):
 
     def draw_entities(self):
         pass
+
+    def draw_ui(self):
+        font_size = int(12 * self.pixel_scale_factor)
+        font = pygame.font.SysFont("Arial", font_size)
+
+        line_length = 0
+        
+        for index, user in enumerate(self.users):
+            if index == self.current_turn:
+                text_color = (255, 215, 0)  # Gold color for current turn
+            else:
+                text_color = (255, 255, 255)  # White color for others
+
+            user_text = f"{user['name']} ({user['type']})"
+
+            text_surface = font.render(user_text, True, text_color)
+
+            x = self.padding_x_L + line_length
+            y = self.padding_y_T / 2 - font_size / 2
+
+            self.scene_manager.screen.blit(text_surface, (x, y))
+
+            line_length += len(user["name"]) * font_size
