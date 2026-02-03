@@ -5,12 +5,15 @@ from src.scene_manager import SceneManager
 class Window():
     def __init__(self, width:int=1280, height:int=720, title:str="Game", current_scene:str="game"):
         pygame.init()
+        self.running = True
+        
         self.width = width
         self.height = height
         self.title = title
+        
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption(self.title)
-        self.running = True
+        
         self.current_scene = current_scene
         
         self.scene_manager = SceneManager(

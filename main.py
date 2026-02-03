@@ -4,7 +4,7 @@ from src.window import Window
 FPS = 60
 
 def main():
-    window = Window(width=720, height=720)
+    window = Window(width=720, height=720, current_scene="game")
 
     while window.running:
         window.handle_events()

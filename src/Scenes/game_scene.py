@@ -5,6 +5,7 @@ import random
 
 from src.Scenes.scene import Scene
 from src.scene_manager import SceneManager
+from src.game_logic import GameLogic
 
 
 class GameScene(Scene):
@@ -30,20 +31,32 @@ class GameScene(Scene):
         self.tile_size = tile_size
         self.pixel_scale_factor = tile_size / 16
         
-        self.top_x = self.panel_top_x
-        self.top_y = self.panel_top_y
+        self.top_x = self.panel_top_x + ((self.panel_bottom_x - self.panel_top_x) - (self.grid_x * tile_size)) / 2
+        self.top_y = self.panel_top_y + ((self.panel_bottom_y - self.panel_top_y) - (self.grid_y * tile_size)) / 2
         self.bottom_x = self.top_x + (self.grid_x * tile_size)
         self.bottom_y = self.top_y + (self.grid_y * tile_size)
         
         background_tile = pygame.image.load("assets/textures/background.png")
         self.background_tile = pygame.transform.scale(background_tile, (math.ceil(tile_size), math.ceil(tile_size)))
 
-        self.users = [{"type": "player", "name": "Test Player"}, {"type": "bot", "name": "Test Bot"}]
-
-        self.current_turn = random.randint(0, len(self.users) - 1)
+        self.game_logic = GameLogic()
+        
+        self.mouse_x = 0
+        self.mouse_y = 0
 
     def handle_events(self, events: list[pygame.event.Event]):
-        pass
+        if self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
+            for event in events:
+                if hasattr(event, "pos"):
+                    self.mouse_x, self.mouse_y = event.pos
+                
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    grid_x = int((self.mouse_x - self.top_x) // self.tile_size)
+                    grid_y = int((self.mouse_y - self.top_y) // self.tile_size)
+                    
+                    if 0 <= grid_x < self.grid_x and 0 <= grid_y < self.grid_y:
+                        self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
+                        self.game_logic.next_turn()
 
     def update(self):
         pass
@@ -80,19 +93,37 @@ class GameScene(Scene):
 
         line_length = 0
         
-        for index, user in enumerate(self.users):
-            if index == self.current_turn:
-                text_color = (255, 215, 0)  # Gold color for current turn
+        for index, user in enumerate(self.game_logic.users):
+            if index == self.game_logic.current_turn:
+                text_colour = (255, 215, 0)  # Gold colour for current turn
             else:
-                text_color = (255, 255, 255)  # White color for others
+                text_colour = (255, 255, 255)  # White colour for others
 
             user_text = f"{user['name']} ({user['type']})"
 
-            text_surface = font.render(user_text, True, text_color)
-
+            text_surface = font.render(user_text, True, text_colour)
             x = self.padding_x_L + line_length
             y = self.padding_y_T / 2 - font_size / 2
 
             self.scene_manager.screen.blit(text_surface, (x, y))
 
             line_length += len(user["name"]) * font_size
+            
+        if self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
+            self.draw_hover_effects(self.mouse_x, self.mouse_y)
+            
+    def draw_hover_effects(self, mouse_x: int, mouse_y: int):
+        grid_x = int((mouse_x - self.top_x) // self.tile_size)
+        grid_y = int((mouse_y - self.top_y) // self.tile_size)
+        
+        if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
+            return
+        
+        hover_rect = pygame.Rect(
+            self.top_x + grid_x * self.tile_size,
+            self.top_y + grid_y * self.tile_size,
+            self.tile_size,
+            self.tile_size
+        )
+        
+        pygame.draw.rect(self.scene_manager.screen, (255, 255, 255, 50), hover_rect, 3)
