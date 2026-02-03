@@ -45,20 +45,22 @@ class GameScene(Scene):
         self.mouse_y = 0
 
     def handle_events(self, events: list[pygame.event.Event]):
-        if self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
-            for event in events:
-                if hasattr(event, "pos"):
-                    self.mouse_x, self.mouse_y = event.pos
+        if self.game_logic.users[self.game_logic.current_turn]["type"] != "player":
+            pass
+        
+        for event in events:
+            if hasattr(event, "pos"):
+                self.mouse_x, self.mouse_y = event.pos
+            
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                grid_x = int((self.mouse_x - self.top_x) // self.tile_size)
+                grid_y = int((self.mouse_y - self.top_y) // self.tile_size)
                 
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    grid_x = int((self.mouse_x - self.top_x) // self.tile_size)
-                    grid_y = int((self.mouse_y - self.top_y) // self.tile_size)
-                    
-                    if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
-                        continue
-                    
-                    self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
-                    self.game_logic.next_turn()
+                if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
+                    continue
+                
+                self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
+                self.game_logic.next_turn()
 
     def update(self):
         pass
@@ -85,6 +87,21 @@ class GameScene(Scene):
         for j in range(self.grid_y + 1):
             y = self.top_y + j * self.tile_size
             pygame.draw.line(self.scene_manager.screen, (50, 50, 50), (self.top_x, y), (self.bottom_x, y), 1)
+            
+        for i in range(self.grid_x):
+            for j in range(self.grid_y):
+                cell_value = self.game_logic.game_state.board[i, j]
+                
+                if cell_value == -1:
+                    continue
+                
+                x = self.top_x + i * self.tile_size
+                y = self.top_y + j * self.tile_size
+                
+                colour = self.game_logic.users[cell_value]["colour"]
+                
+                pygame.draw.circle(self.scene_manager.screen, colour, (x + self.tile_size // 2, y + self.tile_size // 2), (self.tile_size - 4) // 2)
+                
 
     def draw_entities(self):
         pass
