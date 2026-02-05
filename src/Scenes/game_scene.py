@@ -39,10 +39,14 @@ class GameScene(Scene):
         background_tile = pygame.image.load("assets/textures/background.png")
         self.background_tile = pygame.transform.scale(background_tile, (math.ceil(tile_size), math.ceil(tile_size)))
 
-        self.game_logic = GameLogic()
+        users = [{"type": "player", "name": "player1", "colour": (0,0,255)}, {"type": "player", "name": "player2", "colour": (255,0,0)}]
+        self.game_logic = GameLogic(users=users)
         
         self.mouse_x = 0
         self.mouse_y = 0
+
+        self.font_size = int(12 * self.pixel_scale_factor)
+        self.font = pygame.font.SysFont("Arial", self.font_size)
 
     def handle_events(self, events: list[pygame.event.Event]):
         if self.game_logic.users[self.game_logic.current_turn]["type"] != "player":
@@ -107,9 +111,6 @@ class GameScene(Scene):
         pass
 
     def draw_ui(self):
-        font_size = int(12 * self.pixel_scale_factor)
-        font = pygame.font.SysFont("Arial", font_size)
-
         line_length = 0
         
         for index, user in enumerate(self.game_logic.users):
@@ -120,13 +121,13 @@ class GameScene(Scene):
 
             user_text = f"{user['name']} ({user['type']})"
 
-            text_surface = font.render(user_text, True, text_colour)
+            text_surface = self.font.render(user_text, True, text_colour)
             x = self.padding_x_L + line_length
-            y = self.padding_y_T / 2 - font_size / 2
+            y = self.padding_y_T / 2 - self.font_size / 2
 
             self.scene_manager.screen.blit(text_surface, (x, y))
 
-            line_length += len(user["name"]) * font_size
+            line_length += (len(user_text) + 1) * self.font_size / 3 + 20
             
         if self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
             self.draw_hover_effects(self.mouse_x, self.mouse_y)

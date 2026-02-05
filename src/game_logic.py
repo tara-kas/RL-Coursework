@@ -3,8 +3,11 @@ import random
 from src.game_datatypes import GameState
 
 class GameLogic():
-    def __init__(self, grid_x:int=15, grid_y:int=15):
-        self.users = [{"type": "player", "name": "Test Player", "colour": (0,0,255)}, {"type": "bot", "name": "Mr Random", "file": "random", "colour": (255,0,0)}]
+    def __init__(self, grid_x:int=15, grid_y:int=15, users:list[dict]=None):
+        if users is None:
+            self.users = [{"type": "player", "name": "Test Player", "colour": (0,0,255)}, {"type": "bot", "name": "Mr Random", "file": "random", "colour": (255,0,0)}]
+        else:
+            self.users = users
         
         self.game_state = GameState(grid_x, grid_y)
 
