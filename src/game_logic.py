@@ -12,12 +12,16 @@ class GameLogic():
         self.game_state = GameState(grid_x, grid_y)
 
         self.current_turn = random.randint(0, len(self.users) - 1)
+
+    def check_valid_move(self, position:tuple[int, int]):
+        x, y = position
+
+        return self.game_state.board[x, y] == -1
         
     def make_move(self, user_index:int, position:tuple[int, int]):
         if self.users[user_index]["type"] == "player":
-            x, y = position
-            
-            if self.game_state.board[x, y] == -1:
+            if self.check_valid_move(position):
+                x, y = position
                 self.game_state.board[x, y] = user_index
         
     def next_turn(self):

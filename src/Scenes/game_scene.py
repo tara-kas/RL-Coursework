@@ -63,8 +63,9 @@ class GameScene(Scene):
                 if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
                     continue
                 
-                self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
-                self.game_logic.next_turn()
+                if self.game_logic.check_valid_move((grid_x, grid_y)):
+                    self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
+                    self.game_logic.next_turn()
 
     def update(self):
         pass
