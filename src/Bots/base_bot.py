@@ -1,8 +1,8 @@
-from src.game_datatypes import GameState, Action
+from src.game_datatypes import GameState
 
 class BaseBot():
-    def __init__(self, name:str):
-        self.name = name
+    def __init__(self):
+        pass
 
-    def move(self, game_state:GameState) -> Action:
+    def move(self, game_state:GameState) -> tuple[int, int]:
         pass
