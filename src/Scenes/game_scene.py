@@ -75,8 +75,8 @@ class GameScene(Scene):
         self.mouse_y = 0
 
         self.font_size = max(14, int(13 * self.pixel_scale_factor))
-        self.font = pygame.font.SysFont("Arial", self.font_size, bold=True)
-        self.font_small = pygame.font.SysFont("Arial", max(11, self.font_size - 2))
+        self.font = pygame.font.Font("assets/fonts/Pixelify_Sans/static/PixelifySans-Bold.ttf", self.font_size)
+        self.font_small = pygame.font.Font("assets/fonts/Pixelify_Sans/static/PixelifySans-Regular.ttf", max(11, self.font_size - 2))
 
     def handle_events(self, events: list[pygame.event.Event]):
         if self.game_logic.users[self.game_logic.current_turn]["type"] == "bot":
