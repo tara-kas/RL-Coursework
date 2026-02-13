@@ -62,3 +62,7 @@ class GameLogic():
         if hasattr(bot, "move"):
             move = bot.move(self.game_state)
             return move
+        
+    def five_in_a_row(self):
+        GameState.board
+        pass
