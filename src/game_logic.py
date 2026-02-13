@@ -1,5 +1,6 @@
 import random
 import importlib
+import numpy as np
 
 from src.game_datatypes import GameState
 
@@ -26,9 +27,11 @@ class GameLogic():
         return self.game_state.board[x, y] == -1
         
     def make_move(self, user_index:int, position:tuple[int, int]) -> None:
+        x, y = position
         if self.check_valid_move(position):
-            x, y = position
             self.game_state.board[x, y] = user_index
+            
+        self.five_in_a_row(x,y,user_index)
 
     def next_turn(self):
         self.current_turn = (self.current_turn + 1) % len(self.users)
@@ -63,6 +66,67 @@ class GameLogic():
             move = bot.move(self.game_state)
             return move
         
-    def five_in_a_row(self):
-        GameState.board
-        pass
+    def five_in_a_row(self, new_x, new_y, player):
+        count = 0
+        
+        # left to right
+        for cell in range(9):
+            try: 
+                if self.game_state[new_x - 4 + cell][new_y] == player:
+                    count+=1
+            except IndexError:
+                pass
+            else:
+                count = 0
+        
+        if count == 5:
+            return True
+        else:
+            count = 0        
+        
+        # up down
+        for cell in range(9):
+            try:
+                if self.game_state[new_x][new_y - 4 + cell] == player:
+                    count+=1
+            except IndexError:
+                pass
+            else:
+                count = 0
+                
+        if count == 5:
+            return True
+        else:
+            count = 0   
+                
+        # diagonal top left to bottom right
+        for cell in range (9):
+            try:
+                if self.game_state[new_x - 4 + cell][new_y - 4 + cell]:
+                    count+=1
+            except IndexError:
+                pass
+            else:
+                count = 0
+                
+        if count == 5:
+            return True
+        else:
+            count = 0   
+        
+        # diagonal top right to bottom left
+        for cell in range (9):
+            try:
+                if self.game_state[new_x + 4 - cell][new_y - 4 + cell]:
+                    count+=1
+            except IndexError:
+                pass
+            else:
+                count = 0
+                
+        if count == 5:
+            return True
+        else:
+            count = 0   
+            
+        return False
