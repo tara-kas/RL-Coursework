@@ -3,6 +3,7 @@ import importlib
 import numpy as np
 
 from src.game_datatypes import GameState
+from .scene_manager import SceneManager
 
 class GameLogic():
     def __init__(self, grid_x:int=15, grid_y:int=15, users:list[dict]=None):
@@ -31,7 +32,10 @@ class GameLogic():
         if self.check_valid_move(position):
             self.game_state.board[x, y] = user_index
             
-        self.five_in_a_row(x,y,user_index)
+        if self.five_in_a_row(x,y,user_index):
+            print(f"player {user_index} has won!!!!!!!!!")
+            SceneManager.shutdown()
+            
 
     def next_turn(self):
         self.current_turn = (self.current_turn + 1) % len(self.users)
@@ -72,7 +76,7 @@ class GameLogic():
         # left to right
         for cell in range(9):
             try: 
-                if self.game_state[new_x - 4 + cell][new_y] == player:
+                if self.game_state.board[new_x - 4 + cell][new_y] == player:
                     count+=1
             except IndexError:
                 pass
@@ -87,7 +91,7 @@ class GameLogic():
         # up down
         for cell in range(9):
             try:
-                if self.game_state[new_x][new_y - 4 + cell] == player:
+                if self.game_state.board[new_x][new_y - 4 + cell] == player:
                     count+=1
             except IndexError:
                 pass
@@ -102,7 +106,7 @@ class GameLogic():
         # diagonal top left to bottom right
         for cell in range (9):
             try:
-                if self.game_state[new_x - 4 + cell][new_y - 4 + cell]:
+                if self.game_state.board[new_x - 4 + cell][new_y - 4 + cell]:
                     count+=1
             except IndexError:
                 pass
@@ -117,7 +121,7 @@ class GameLogic():
         # diagonal top right to bottom left
         for cell in range (9):
             try:
-                if self.game_state[new_x + 4 - cell][new_y - 4 + cell]:
+                if self.game_state.board[new_x + 4 - cell][new_y - 4 + cell]:
                     count+=1
             except IndexError:
                 pass
@@ -128,5 +132,7 @@ class GameLogic():
             return True
         else:
             count = 0   
+            
+        print(f"{new_x}, {new_y}")
             
         return False
