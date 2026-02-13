@@ -77,61 +77,61 @@ class GameLogic():
         for cell in range(9):
             try: 
                 if self.game_state.board[new_x - 4 + cell][new_y] == player:
-                    count+=1
+                    count = count + 1
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
             except IndexError:
                 pass
-            else:
-                count = 0
         
-        if count == 5:
-            return True
-        else:
-            count = 0        
+        count = 0        
         
         # up down
         for cell in range(9):
             try:
                 if self.game_state.board[new_x][new_y - 4 + cell] == player:
                     count+=1
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
             except IndexError:
                 pass
-            else:
-                count = 0
                 
-        if count == 5:
-            return True
-        else:
-            count = 0   
+        count = 0   
                 
         # diagonal top left to bottom right
         for cell in range (9):
             try:
-                if self.game_state.board[new_x - 4 + cell][new_y - 4 + cell]:
+                if self.game_state.board[new_x - 4 + cell][new_y - 4 + cell] == player:
                     count+=1
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
             except IndexError:
                 pass
             else:
                 count = 0
                 
-        if count == 5:
-            return True
-        else:
-            count = 0   
+        count = 0   
         
         # diagonal top right to bottom left
         for cell in range (9):
             try:
-                if self.game_state.board[new_x + 4 - cell][new_y - 4 + cell]:
+                if self.game_state.board[new_x + 4 - cell][new_y - 4 + cell] == player:
                     count+=1
+                else:
+                    count = 0
+                    if count == 5:
+                        return True
             except IndexError:
                 pass
             else:
                 count = 0
                 
-        if count == 5:
-            return True
-        else:
-            count = 0   
+        count = 0   
             
         print(f"{new_x}, {new_y}")
             
