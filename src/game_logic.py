@@ -58,6 +58,7 @@ class GameLogic():
             raise KeyError(f"Bot {bot_name} not found.")
 
         bot = self.bots[bot_name]
+        self.game_state.current_player = self.current_turn
 
         if hasattr(bot, "move"):
             move = bot.move(self.game_state)
