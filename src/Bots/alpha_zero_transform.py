@@ -18,7 +18,7 @@ def _create_2d_sinusoidal_encoding(board_size: int, embed_dim: int) -> torch.Ten
     div_term = torch.exp(torch.arange(0, d_half, 2).float() * (-np.log(10000.0) / d_half))
 
     pe = torch.zeros(board_size * board_size, embed_dim)
-    
+
     for i in range(board_size):
         for j in range(board_size):
             pos = i * board_size + j
@@ -35,12 +35,23 @@ def _create_2d_sinusoidal_encoding(board_size: int, embed_dim: int) -> torch.Ten
 
 
 class Bot(BaseBot):
-    def __init__(self, num_simulations: int = 100, board_size: int = 15):
+    def __init__(
+        self,
+        num_simulations: int = 100,
+        board_size: int = 15,
+        device: str | torch.device | None = None,
+    ):
         super().__init__()
-        self.model = AlphaZeroTransform(board_size=board_size)
+        
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.device = torch.device(device)
+        self.model = AlphaZeroTransform(board_size=board_size).to(self.device)
         self.model.eval()
         self.num_simulations = num_simulations
         self.board_size = board_size
+        self.device = device
 
     def move(self, game_state: GameState) -> tuple[int, int] | None:
         legal_moves = get_legal_moves(game_state.board)
@@ -56,6 +67,7 @@ class Bot(BaseBot):
             self.model,
             self.board_size,
             num_simulations=self.num_simulations,
+            device=self.device,
         )
 
 

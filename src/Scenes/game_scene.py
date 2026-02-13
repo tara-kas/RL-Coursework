@@ -68,7 +68,7 @@ class GameScene(Scene):
         self.bottom_x = self.play_bottom_x
         self.bottom_y = self.play_bottom_y
 
-        users = [{"type": "player", "name": "player1", "colour": (0,0,255)}, {"type": "bot", "name": "Mr Random", "file": "random", "colour": (255,0,0)}]
+        users = [{"type": "player", "name": "player1", "colour": (0,0,255)}, {"type": "bot", "name": "AlphaZero", "file": "alpha_zero_transform", "colour": (255,0,0)}]
         self.game_logic = GameLogic(users=users)
         
         self.mouse_x = 0

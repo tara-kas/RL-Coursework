@@ -12,6 +12,7 @@ def get_legal_moves(board: np.ndarray) -> list[tuple[int, int]]:
 
 def apply_move(board: np.ndarray, move: tuple[int, int], player: int) -> np.ndarray:
     """Return a new board with the move applied. Original board is not modified."""
+    
     new_board = board.copy()
     x, y = move
     new_board[x, y] = player
