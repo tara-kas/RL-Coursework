@@ -41,15 +41,23 @@ class GameScene(Scene):
         self.grid_x = 15
         self.grid_y = 15
         
-        tile_size = min((self.panel_bottom_x - self.panel_top_x) / self.grid_x, (self.panel_bottom_y - self.panel_top_y) / self.grid_y)
+        # 15x15 playable grid in the middle
+        num_gaps = self.grid_x - 1  # 14 gaps between 15 intersections
+        num_slots = num_gaps + 2   # 16 slots for grid and margin
+        
+        self.board_padding = 14
+        
+        avail_w = (self.panel_bottom_x - self.panel_top_x) - 2 * self.board_padding
+        avail_h = (self.panel_bottom_y - self.panel_top_y) - 2 * self.board_padding
+        
+        tile_size = min(avail_w / num_slots, avail_h / num_slots)
+        
         self.tile_size = tile_size
         self.pixel_scale_factor = tile_size / 16
         
-        # Board area 
-        self.board_padding = 14
-        
-        play_w = self.grid_x * tile_size
-        play_h = self.grid_y * tile_size
+        # Board surface is 16x16 tiles to include grid and margin
+        play_w = num_slots * tile_size
+        play_h = num_slots * tile_size
         
         self.play_top_x = self.panel_top_x + ((self.panel_bottom_x - self.panel_top_x) - play_w - 2 * self.board_padding) / 2 + self.board_padding
         self.play_top_y = self.panel_top_y + ((self.panel_bottom_y - self.panel_top_y) - play_h - 2 * self.board_padding) / 2 + self.board_padding
@@ -63,10 +71,11 @@ class GameScene(Scene):
             play_h + 2 * self.board_padding,
         )
         
-        self.top_x = self.play_top_x
-        self.top_y = self.play_top_y
-        self.bottom_x = self.play_bottom_x
-        self.bottom_y = self.play_bottom_y
+        # Playable 15x15 grid is inset by one tile from the board surface (not on the outline)
+        self.top_x = self.play_top_x + tile_size
+        self.top_y = self.play_top_y + tile_size
+        self.bottom_x = self.top_x + num_gaps * tile_size
+        self.bottom_y = self.top_y + num_gaps * tile_size
 
         users = [{"type": "player", "name": "player1", "colour": (0,0,255)}, {"type": "bot", "name": "Mr Random", "file": "random", "colour": (255,0,0)}]
         self.game_logic = GameLogic(users=users)
@@ -93,8 +102,9 @@ class GameScene(Scene):
             
             if self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    grid_x = int((self.mouse_x - self.top_x) // self.tile_size)
-                    grid_y = int((self.mouse_y - self.top_y) // self.tile_size)
+                    # Snap to nearest intersection of grid lines
+                    grid_x = int(round((self.mouse_x - self.top_x) / self.tile_size))
+                    grid_y = int(round((self.mouse_y - self.top_y) / self.tile_size))
                     
                     if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
                         continue
@@ -117,19 +127,19 @@ class GameScene(Scene):
 
         self.draw_board_frame()
 
-        board_rect = pygame.Rect(self.top_x, self.top_y, self.bottom_x - self.top_x, self.bottom_y - self.top_y)
+        board_rect = pygame.Rect(self.play_top_x, self.play_top_y, self.play_bottom_x - self.play_top_x, self.play_bottom_y - self.play_top_y)
         pygame.draw.rect(screen, COLOURS["board_surface"], board_rect)
 
         grid_colour = COLOURS["grid_line"]
         line_w = max(1, int(round(self.tile_size / 24)))
         
-        #Vertical grid lines
-        for i in range(self.grid_x + 1):
+        # 15 vertical lines
+        for i in range(self.grid_x):
             x = int(self.top_x + i * self.tile_size)
             pygame.draw.line(screen, grid_colour, (x, self.top_y), (x, self.bottom_y), line_w)
             
-        #Horizontal grid lines
-        for j in range(self.grid_y + 1):
+        # 15 horizontal lines
+        for j in range(self.grid_y):
             y = int(self.top_y + j * self.tile_size)
             pygame.draw.line(screen, grid_colour, (self.top_x, y), (self.bottom_x, y), line_w)
             
@@ -172,8 +182,9 @@ class GameScene(Scene):
                 if cell_value == -1:
                     continue
                 
-                cx = int(self.top_x + (i + 0.5) * self.tile_size)
-                cy = int(self.top_y + (j + 0.5) * self.tile_size)
+                # Stone on intersection of grid lines
+                cx = int(self.top_x + i * self.tile_size) + 1
+                cy = int(self.top_y + j * self.tile_size) + 1
                 
                 colour = self.game_logic.users[cell_value]["colour"]
                 
@@ -228,14 +239,16 @@ class GameScene(Scene):
             self.draw_hover_effects(self.mouse_x, self.mouse_y)
 
     def draw_hover_effects(self, mouse_x: int, mouse_y: int):
-        grid_x = int((mouse_x - self.top_x) // self.tile_size)
-        grid_y = int((mouse_y - self.top_y) // self.tile_size)
+        # Snap to nearest intersection of grid lines
+        grid_x = int(round((mouse_x - self.top_x) / self.tile_size))
+        grid_y = int(round((mouse_y - self.top_y) / self.tile_size))
         
         if grid_x < 0 or grid_y < 0 or grid_x >= self.grid_x or grid_y >= self.grid_y:
             return
         
-        cx = int(self.top_x + (grid_x + 0.5) * self.tile_size)
-        cy = int(self.top_y + (grid_y + 0.5) * self.tile_size)
+        cx = int(self.top_x + grid_x * self.tile_size) + 1
+        cy = int(self.top_y + grid_y * self.tile_size) + 1
+        
         radius = max(4, (self.tile_size - 6) // 2)
         
         # Hover ring
