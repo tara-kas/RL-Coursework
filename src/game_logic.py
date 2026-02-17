@@ -1,10 +1,14 @@
 import random
 import importlib
+import numpy as np
 
 from src.game_datatypes import GameState
+from .scene_manager import SceneManager
 
 class GameLogic():
     def __init__(self, grid_x:int=15, grid_y:int=15, users:list[dict]=None):
+        self.grid_x = grid_x
+        self.grid_y = grid_y
         if users is None:
             self.users = [{"type": "player", "name": "Test Player", "colour": (0,0,255)}, {"type": "bot", "name": "Mr Random", "file": "random", "colour": (255,0,0)}]
         else:
@@ -26,9 +30,14 @@ class GameLogic():
         return self.game_state.board[x, y] == -1
         
     def make_move(self, user_index:int, position:tuple[int, int]) -> None:
+        x, y = position
         if self.check_valid_move(position):
-            x, y = position
             self.game_state.board[x, y] = user_index
+            
+        if self.five_in_a_row(x,y,user_index):
+            print(f"player {user_index} has won!!!!!!!!!")
+            SceneManager.shutdown()
+            
 
     def next_turn(self):
         self.current_turn = (self.current_turn + 1) % len(self.users)
@@ -62,3 +71,57 @@ class GameLogic():
         if hasattr(bot, "move"):
             move = bot.move(self.game_state, **kwargs)
             return move
+        
+    def five_in_a_row(self, new_x, new_y, player):
+        count = 0
+        
+        # left to right
+        for cell in range(9):
+            if new_x-4+cell >= 0 and new_x-4+cell < self.grid_x:
+                if self.game_state.board[new_x - 4 + cell][new_y] == player:
+                    count = count + 1
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
+        
+        count = 0        
+        
+        # up down
+        for cell in range(9):
+            if new_y - 4 + cell >= 0 and new_y - 4 + cell < self.grid_y:
+                if self.game_state.board[new_x][new_y - 4 + cell] == player:
+                    count+=1
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
+                
+        count = 0   
+                
+        # diagonal top left to bottom right
+        for cell in range (9):
+            if new_x - 4 + cell >= 0 and new_x - 4 + cell < self.grid_x and new_y - 4 + cell >= 0 and new_y - 4 + cell < self.grid_y:
+                if self.game_state.board[new_x - 4 + cell][new_y - 4 + cell] == player:
+                    count+=1
+                    print(f"{count}")
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
+                
+        count = 0   
+        
+        # diagonal top right to bottom left
+        for cell in range (9):
+            if new_x + 4 - cell >= 0 and new_x + 4 - cell < self.grid_x and new_y - 4 + cell >= 0 and new_y - 4 + cell < self.grid_y:
+                if self.game_state.board[new_x + 4 - cell][new_y - 4 + cell] == player:
+                    count+=1
+                    if count == 5:
+                        return True
+                else:
+                    count = 0
+
+        count = 0 
+            
+        return False
