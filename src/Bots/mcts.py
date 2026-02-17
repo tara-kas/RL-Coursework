@@ -3,12 +3,18 @@ from src.game_datatypes import GameState
 from src.game_logic import GameLogic
 import numpy as np
 
+#TODO:
+#method to get remaining valid moves
+#upper confidence bound method
+#check draw logic
+
 class MCTSNode:
     def __init__(self, state: GameState):
         self.visits = 0
         self.value_sum = 0
         self.children = None
         self.state = state
+        self.last_player = -1
 
     def get_value(self):
         return self.value_sum / self.visits
@@ -41,11 +47,11 @@ class PureMCTS(BaseBot):
         else:
             return
         
-    def backup(self, search_path):
+    def backup(self, search_path, winner):
         for node in search_path:
             node.visits += 1
-            #if move belongs to winner then this node increases value
-            #if move belongs to loser then this node decreases value
+            if node.last_player == winner:
+                node.value_sum += 1
 
     def run(self):
         game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
@@ -67,6 +73,7 @@ class PureMCTS(BaseBot):
             game.check_valid_move(next_action)
             win = game.five_in_a_row()
             game.make_move(game.current_turn, next_action)
+            self.cur_node.last_player = game.current_turn #did winner or loser play this move for this playthrough
             game.next_turn()
             #play next action
             #check win?
@@ -86,6 +93,7 @@ class PureMCTS(BaseBot):
         next_action = game.get_bot_move(names[game.current_turn], t="random")
         game.check_valid_move(next_action)
         game.make_move(game.current_turn, next_action)
+        self.cur_node.last_player = game.current_turn #did winner or loser play this move for this playthrough
         game.next_turn()
         self.cur_node.expand(game.game_state)
         
@@ -103,8 +111,12 @@ class PureMCTS(BaseBot):
 
             if win == True:
                 game_finished = True
+                loser = game.current_turn
+                winner = game.next_turn()
             elif False: #condition for draw
                 game_finished = True
+                winner = -1
+                loser = -1
         
         #backup value scores
         self.backup(search_path, winner, loser)
