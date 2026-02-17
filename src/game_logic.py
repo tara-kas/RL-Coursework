@@ -53,12 +53,12 @@ class GameLogic():
                 
         return None
     
-    def get_bot_move(self, bot_name:str) -> tuple[int, int]:
+    def get_bot_move(self, bot_name:str, **kwargs) -> tuple[int, int]:
         if bot_name not in self.bots:
             raise KeyError(f"Bot {bot_name} not found.")
 
         bot = self.bots[bot_name]
 
         if hasattr(bot, "move"):
-            move = bot.move(self.game_state)
+            move = bot.move(self.game_state, **kwargs)
             return move

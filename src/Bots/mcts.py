@@ -30,12 +30,32 @@ class PureMCTS(BaseBot):
     def __init__(self):
         super().__init__()
         self.root = MCTSNode(None)
+        self.cur_node = self.root
+
+    def move(self, **kwargs):
+        t = kwargs.get("t", "random")
+        if t == "random":
+            return None
+        else:
+            return 
 
     def run(self):
-        cur_node = self.root
+        game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
+        
+        #override the bots to be the same player
+        game.bots["mcts"] = self
+        game.bots["mcts mirror"] = self
+
+        names = ["mcts", "mcts mirror"]
+
+        self.cur_node = self.root
+
+        #while we have two bots playing each other, both of them are the same
         while cur_node is not None: #while not at leaf
-            next_priors = cur_node.get_ucb_scores()
-            next_action = np.argmax(next_priors)
+            next_action = game.get_bot_move(names[game.current_turn], t="ucb")
+            game.check_valid_move(next_action)
+            game.make_move(game.current_turn, next_action)
+            game.next_turn()
             #play next action
             #check win?
             win = False
@@ -49,12 +69,18 @@ class PureMCTS(BaseBot):
 
         #we are now at a leaf
         #pick a random next action
-        next_action = np.random.randint(1,225)
+        next_action = game.get_bot_move(names[game.current_turn], t="random")
+        game.check_valid_move(next_action)
+        game.make_move(game.current_turn, next_action)
+        game.next_turn()
         cur_node.expand(next_action)
 
         game_finished = False
         while game_finished != True:
-            next_action = np.random.randint(1,255)
             #play randomly from both players
+            next_action = game.get_bot_move(names[game.current_turn], t="random")
+            game.check_valid_move(next_action)
+            game.make_move(game.current_turn, next_action)
+            game.next_turn()
         
         #backup value scores
