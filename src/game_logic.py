@@ -64,6 +64,7 @@ class GameLogic():
             # Create instance of bot
             if hasattr(module, "Bot"):
                 bot_class = getattr(module, "Bot")
+                
                 instance = bot_class()
                 
                 return instance
