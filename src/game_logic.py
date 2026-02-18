@@ -21,13 +21,27 @@ class GameLogic():
                 self.bots[user["name"]] = self.load_bot(user["file"])
         
         self.game_state = GameState(grid_x, grid_y)
+        self.move_mask = np.zeros((grid_x, grid_y), dtype=object)
+
+        for i in range(grid_x):
+            for j in range(grid_y):
+                self.move_mask[i][j] = (i,j)
 
         self.current_turn = random.randint(0, len(self.users) - 1)
 
     def check_valid_move(self, position:tuple[int, int]) -> bool:
         x, y = position
 
+        if x < 0 or y < 0 or x >= self.grid_x or y >= self.grid_y:
+            return False
+
         return self.game_state.board[x, y] == -1
+    
+    def get_valid_moves(self) -> list:
+        res = np.where(self.game_state == -1, self.move_mask, 0)
+        valid = np.nonzero(res)
+        posified = [(x,y) for x,y in zip(valid[0], valid[1])]
+        return posified
         
     def make_move(self, user_index:int, position:tuple[int, int]) -> None:
         x, y = position

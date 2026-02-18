@@ -36,14 +36,16 @@ class MCTSNode:
 class PureMCTS(BaseBot):
     def __init__(self):
         super().__init__()
-        game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
+        self.game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
         self.root = MCTSNode(game.game_state)
         self.cur_node = self.root
 
     def move(self, **kwargs):
         t = kwargs.get("t", "random")
+        moves = self.game.get_valid_moves()
         if t == "random":
-            return None
+            choice = np.random.randint(0,len(moves))
+            return moves[choice]
         else:
             return
         
@@ -54,7 +56,7 @@ class PureMCTS(BaseBot):
                 node.value_sum += 1
 
     def run(self):
-        game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
+        self.game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
         
         #override the bots to be the same player
         game.bots["mcts"] = self
