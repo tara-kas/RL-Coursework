@@ -37,7 +37,7 @@ class PureMCTS(BaseBot):
     def __init__(self):
         super().__init__()
         self.game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
-        self.root = MCTSNode(game.game_state)
+        self.root = MCTSNode(self.game.game_state)
         self.cur_node = self.root
 
     def move(self, **kwargs):
@@ -59,8 +59,8 @@ class PureMCTS(BaseBot):
         self.game = GameLogic(15,15,[{"type": "bot", "name": "mcts", "file": "mcts", "colour": (0,0,255)},{"type": "bot", "name": "mcts mirror", "file": "mcts", "colour": (0,255,0)}])
         
         #override the bots to be the same player
-        game.bots["mcts"] = self
-        game.bots["mcts mirror"] = self
+        self.game.bots["mcts"] = self
+        self.game.bots["mcts mirror"] = self
 
         names = ["mcts", "mcts mirror"]
         winner = -1
@@ -71,18 +71,18 @@ class PureMCTS(BaseBot):
         #while we have two bots playing each other, both of them are the same
         while self.cur_node is not None: #while not at leaf
             self.search_path.append(self.cur_node)
-            next_action = game.get_bot_move(names[game.current_turn], t="ucb")
-            game.check_valid_move(next_action)
-            win = game.five_in_a_row()
-            game.make_move(game.current_turn, next_action)
-            self.cur_node.last_player = game.current_turn #did winner or loser play this move for this playthrough
-            game.next_turn()
+            next_action = self.game.get_bot_move(names[self.game.current_turn], t="ucb")
+            self.game.check_valid_move(next_action)
+            win = self.game.five_in_a_row()
+            self.game.make_move(self.game.current_turn, next_action)
+            self.cur_node.last_player = self.game.current_turn #did winner or loser play this move for this playthrough
+            self.game.next_turn()
             #play next action
             #check win?
             if win == True: #need to also check draw condition
-                winner = game.current_turn
-                game.next_turn()
-                loser = game.current_turn
+                winner = self.game.current_turn
+                self.game.next_turn()
+                loser = self.game.current_turn
 
                 self.backup(search_path, winner, loser)
 
@@ -92,12 +92,12 @@ class PureMCTS(BaseBot):
 
         #we are now at a leaf
         #pick a random next action
-        next_action = game.get_bot_move(names[game.current_turn], t="random")
-        game.check_valid_move(next_action)
-        game.make_move(game.current_turn, next_action)
-        self.cur_node.last_player = game.current_turn #did winner or loser play this move for this playthrough
-        game.next_turn()
-        self.cur_node.expand(game.game_state)
+        next_action = self.game.get_bot_move(names[self.game.current_turn], t="random")
+        self.game.check_valid_move(next_action)
+        self.game.make_move(self.game.current_turn, next_action)
+        self.cur_node.last_player = self.game.current_turn #did winner or loser play this move for this playthrough
+        self.game.next_turn()
+        self.cur_node.expand(self.game.game_state)
         
         #add new child to search path
         search_path.append(self.cur_node.get_child(next_action))
@@ -105,16 +105,16 @@ class PureMCTS(BaseBot):
         game_finished = False
         while game_finished != True:
             #play randomly from both players
-            next_action = game.get_bot_move(names[game.current_turn], t="random")
-            game.check_valid_move(next_action)
-            win = game.five_in_a_row()
-            game.make_move(game.current_turn, next_action)
-            game.next_turn()
+            next_action = self.game.get_bot_move(names[self.game.current_turn], t="random")
+            self.game.check_valid_move(next_action)
+            win = self.game.five_in_a_row()
+            self.game.make_move(self.game.current_turn, next_action)
+            self.game.next_turn()
 
             if win == True:
                 game_finished = True
-                loser = game.current_turn
-                winner = game.next_turn()
+                loser = self.game.current_turn
+                winner = self.game.next_turn()
             elif False: #condition for draw
                 game_finished = True
                 winner = -1
