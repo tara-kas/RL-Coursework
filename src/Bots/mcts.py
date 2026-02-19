@@ -3,6 +3,10 @@ from src.game_datatypes import GameState
 from src.game_logic import GameLogic
 import numpy as np
 
+#TODO: logic for choosing moves against player
+# heuristic based/optimised non pure MCTS
+# export function to save a trained tree
+
 class MCTSNode:
     def __init__(self, state: GameState):
         self.visits = 0
@@ -30,6 +34,20 @@ class PureMCTS(BaseBot):
         self.root = MCTSNode(self.game.game_state)
         self.cur_node = self.root
 
+    def get_node_ucbs(self, c):
+        ucb = []
+        children = [(action, child) for action, child in self.cur_node.children.items()] #get states into a list
+        parent_visits = max(1, self.cur_node.visits)
+
+        for action, child in children:
+            if child.visits == 0:
+                ucb.append(float('inf'))
+                continue
+            exploitation = child.get_value()
+            exploration = c * np.sqrt(np.log(parent_visits)/child.visits)
+            ucb.append(exploitation + exploration)
+        return children, ucb
+
     def move(self, game_state, **kwargs):
         t = kwargs.get("t", "random")
         c = kwargs.get("c", 1.4)
@@ -40,19 +58,16 @@ class PureMCTS(BaseBot):
             choice = np.random.randint(0,len(moves))
             return moves[choice]
         else:
+            if self.cur_node.children is None:
+                return moves[np.random.randint(0,len(moves))]
+            
             unexpanded = [m for m in moves if m not in self.cur_node.children.keys()]
 
             if len(unexpanded) > 0:
-                return unexpanded[np.random.randint(len(unexpanded))]
+                return unexpanded[np.random.randint(0,len(unexpanded))]
             
-            ucb = []
-            children = [(action, child) for action, child in self.cur_node.children.items()] #get states into a list
-            parent_visits = self.cur_node.visits
-
-            for action, child in children:
-                exploitation = child.get_value()
-                exploration = c * np.sqrt(np.log(parent_visits)/child.visits)
-                ucb.append(exploitation + exploration)
+            print("Exploiting")
+            children, ucb = self.get_node_ucbs(c)
 
             choice = np.argmax(ucb)
             return children[choice][0]
@@ -77,12 +92,35 @@ class PureMCTS(BaseBot):
         search_path = []
 
         #while we have two bots playing each other, both of them are the same
-        while self.cur_node is not None and self.cur_node.children is not None: #while not at leaf
+        while self.cur_node is not None: #while not at leaf
             search_path.append(self.cur_node)
             next_action = self.game.get_bot_move(names[self.game.current_turn], t="ucb")
             if next_action is None:
                 self.backup(search_path, -1) #draw reached on last move
                 return
+            
+            if self.cur_node.children is None or next_action not in self.cur_node.children.keys():
+                self.cur_node.expand(MCTSNode(self.game.game_state), next_action)
+                self.cur_node = self.cur_node.get_child(next_action)
+                search_path.append(self.cur_node)
+                #add new child to search path
+                x,y = next_action
+                win = self.game.five_in_a_row(x,y,self.game.current_turn)
+                self.game.make_move(self.game.current_turn, next_action)
+                self.cur_node.last_player = self.game.current_turn #did winner or loser play this move for this playthrough
+                self.game.next_turn()
+                #play next action
+                #check win?
+                if win == True: #need to also check draw condition
+                    print("Won")
+                    winner = self.game.current_turn
+
+                    self.backup(search_path, winner)
+
+                    return
+                break
+
+            self.cur_node = self.cur_node.get_child(next_action)
             
             x,y = next_action
             win = self.game.five_in_a_row(x,y,self.game.current_turn)
@@ -97,22 +135,6 @@ class PureMCTS(BaseBot):
                 self.backup(search_path, winner)
 
                 return
-                
-            self.cur_node = self.cur_node.get_child(next_action)
-        #we are now at a leaf
-        #pick a random next action
-        next_action = self.game.get_bot_move(names[self.game.current_turn], t="random")
-        if next_action is None: #draw reached on previous move
-            self.backup(search_path, -1)
-            return
-        
-        self.game.make_move(self.game.current_turn, next_action)
-        self.cur_node.last_player = self.game.current_turn #did winner or loser play this move for this playthrough
-        self.game.next_turn()
-        self.cur_node.expand(MCTSNode(self.game.game_state), next_action)
-        
-        #add new child to search path
-        search_path.append(self.cur_node.get_child(next_action))
 
         game_finished = False
         while game_finished != True:
@@ -127,6 +149,7 @@ class PureMCTS(BaseBot):
             self.game.next_turn()
 
             if win == True:
+                print("Won")
                 game_finished = True
                 winner = self.game.next_turn()
         
