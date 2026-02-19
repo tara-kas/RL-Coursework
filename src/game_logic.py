@@ -38,7 +38,7 @@ class GameLogic():
         return self.game_state.board[x, y] == -1
     
     def get_valid_moves(self) -> list:
-        res = np.where(self.game_state == -1, self.move_mask, 0)
+        res = np.where(self.game_state.board == -1, self.move_mask, 0)
         valid = np.nonzero(res)
         posified = [(x,y) for x,y in zip(valid[0], valid[1])]
         return posified
@@ -48,9 +48,9 @@ class GameLogic():
         if self.check_valid_move(position):
             self.game_state.board[x, y] = user_index
             
-        if self.five_in_a_row(x,y,user_index):
-            print(f"player {user_index} has won!!!!!!!!!")
-            SceneManager.shutdown()
+        #if self.five_in_a_row(x,y,user_index):
+        #    print(f"player {user_index} has won!!!!!!!!!")
+        #    SceneManager.shutdown()
             
 
     def next_turn(self):
@@ -64,7 +64,7 @@ class GameLogic():
             # Create instance of bot
             if hasattr(module, "Bot"):
                 bot_class = getattr(module, "Bot")
-                
+
                 instance = bot_class()
                 
                 return instance
@@ -119,7 +119,6 @@ class GameLogic():
             if new_x - 4 + cell >= 0 and new_x - 4 + cell < self.grid_x and new_y - 4 + cell >= 0 and new_y - 4 + cell < self.grid_y:
                 if self.game_state.board[new_x - 4 + cell][new_y - 4 + cell] == player:
                     count+=1
-                    print(f"{count}")
                     if count == 5:
                         return True
                 else:
