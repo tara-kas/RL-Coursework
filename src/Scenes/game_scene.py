@@ -6,6 +6,7 @@ import random
 from src.Scenes.scene import Scene
 from src.scene_manager import SceneManager
 from src.game_logic import GameLogic
+from src.Bots.mcts import PureMCTS
 
 COLOURS = {
     "bg_dark": (28, 26, 31),
@@ -79,6 +80,11 @@ class GameScene(Scene):
 
         users = [{"type": "player", "name": "player1", "colour": (0,0,255)}, {"type": "bot", "name": "Mr Random", "file": "random", "colour": (255,0,0)}]
         self.game_logic = GameLogic(users=users)
+        ts = PureMCTS()
+        ts.load_tree()
+        self.game_logic.bots["mcts"] = ts
+        del self.game_logic.bots["Mr Random"]
+        self.game_logic.users[1] = {"type": "bot", "name": "mcts", "colour": (255,0,0)}
         
         self.mouse_x = 0
         self.mouse_y = 0
