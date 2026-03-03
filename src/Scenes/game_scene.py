@@ -6,6 +6,7 @@ import random
 from src.Scenes.scene import Scene
 from src.scene_manager import SceneManager
 from src.game_logic import GameLogic
+from src.model_loader import DEFAULT_WEIGHTS_PATH
 
 COLOURS = {
     "bg_dark": (28, 26, 31),
@@ -77,7 +78,11 @@ class GameScene(Scene):
         self.bottom_x = self.top_x + num_gaps * tile_size
         self.bottom_y = self.top_y + num_gaps * tile_size
 
-        users = [{"type": "player", "name": "player1", "colour": (0,0,255)}, {"type": "bot", "name": "AlphaZero", "file": "alpha_zero_transform", "colour": (255,0,0)}]
+        users = [
+            {"type": "player", "name": "player1", "colour": (0,0,255)},
+            {"type": "bot", "name": "AlphaZero", "file": "alpha_zero_transform", "colour": (255,0,0),
+             "bot_kwargs": {"weights_path": DEFAULT_WEIGHTS_PATH}},
+        ]
         self.game_logic = GameLogic(users=users)
         
         self.mouse_x = 0

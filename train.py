@@ -1,0 +1,279 @@
+"""
+Standalone AlphaZero self-play training for Gomoku. No Pygame/UI dependencies.
+Run: python train.py [--options]
+"""
+import argparse
+import os
+import random
+import sys
+from typing import Callable
+
+import numpy as np
+import torch
+
+from src.gomoku_game import (
+    GAME_NOT_OVER,
+    WIN,
+    DRAW,
+    apply_move,
+    get_game_result,
+)
+from src.gomoku_utils import preprocess_board
+from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot
+from src.model_loader import save_weights as save_model_weights
+
+
+def progress_bar(
+    current: int,
+    total: int,
+    width: int = 30,
+    prefix: str = "",
+    suffix: str = "",
+    fill: str = "=",
+    head: str = ">",
+    empty: str = " ",
+) -> str:
+    """Build a single-line progress bar string: [=====>    ] 50% (current/total)."""
+    if total <= 0:
+        pct = 100.0
+        filled = width
+    else:
+        pct = 100.0 * current / total
+        filled = int(width * current / total)
+    bar = fill * max(0, filled - 1) + (head if filled > 0 else "") + empty * max(0, width - filled)
+    return f"{prefix}[{bar}] {pct:5.1f}% ({current}/{total}){suffix}"
+
+
+def self_play(
+    bot: Bot,
+    board_size: int,
+    num_games: int,
+    c_puct: float = 1.5,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[tuple[np.ndarray, int, np.ndarray, float]]:
+    """
+    Run num_games of self-play using the bot's model. Returns a list of (board, current_player, policy, z).
+    """
+    bot.model.eval()
+    buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
+
+    for g in range(num_games):
+        if progress_callback is not None:
+            progress_callback(g + 1, num_games)
+        board = np.full((board_size, board_size), -1, dtype=np.int32)
+        current_player = 0
+        game_history: list[tuple[np.ndarray, int, np.ndarray]] = []
+
+        while True:
+            move, policy = bot.get_move_and_policy(
+                board.copy(),
+                current_player,
+                c_puct=c_puct,
+            )
+            game_history.append((board.copy(), current_player, policy))
+
+            board = apply_move(board, move, current_player)
+            result = get_game_result(board, move, current_player)
+
+            if result != GAME_NOT_OVER:
+                # Assign value z from the perspective of the player who was to move in each step
+                if result == WIN:
+                    winner = current_player
+                else:
+                    winner = -1  # draw
+                for b, p, pi in game_history:
+                    if winner == -1:
+                        z = 0.0
+                    else:
+                        z = 1.0 if p == winner else -1.0
+                    buffer.append((b, p, pi, z))
+                break
+
+            current_player = 1 - current_player
+
+    return buffer
+
+
+def train_step(
+    batch: list[tuple[np.ndarray, int, np.ndarray, float]],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    board_size: int,
+    device: torch.device,
+    value_coef: float = 1.0,
+) -> tuple[float, float]:
+    """One training step on a batch. Returns (policy_loss, value_loss)."""
+    model.train()
+
+    states_list = []
+    policy_targets_list = []
+    value_targets_list = []
+    masks_list = []
+
+    for board, current_player, policy, z in batch:
+        planes = preprocess_board(board, current_player)
+        states_list.append(planes)
+        policy_targets_list.append(policy)
+        value_targets_list.append(z)
+        legal_mask = (board == -1).astype(np.float32).flatten()
+        masks_list.append(legal_mask)
+
+    states = torch.tensor(np.stack(states_list), dtype=torch.float32, device=device)
+    policy_targets = torch.tensor(
+        np.stack(policy_targets_list), dtype=torch.float32, device=device
+    )
+    value_targets = torch.tensor(
+        np.stack(value_targets_list), dtype=torch.float32, device=device
+    ).unsqueeze(1)
+    masks = torch.tensor(np.stack(masks_list), dtype=torch.float32, device=device)
+
+    policy_pred, value_pred = model(states, masks)
+
+    # Policy: soft targets from MCTS visit distribution -> KL divergence
+    policy_loss = torch.nn.functional.kl_div(
+        torch.log(policy_pred + 1e-9),
+        policy_targets,
+        reduction="batchmean",
+    )
+    value_loss = torch.nn.functional.mse_loss(value_pred, value_targets)
+
+    loss = policy_loss + value_coef * value_loss
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    return policy_loss.item(), value_loss.item()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="AlphaZero Gomoku self-play training")
+    parser.add_argument("--board_size", type=int, default=15)
+    parser.add_argument("--num_simulations", type=int, default=50)
+    parser.add_argument("--games_per_iteration", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--train_epochs", type=int, default=3)
+    parser.add_argument("--checkpoint_dir", type=str, default="weights")
+    parser.add_argument("--save_best_path", type=str, default="weights/best.pt")
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume")
+    parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--value_coef", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--no-compile", action="store_true", help="Disable torch.compile for the model")
+    parser.add_argument("--mcts_batch_size", type=int, default=32, help="Batch size for MCTS leaf evaluation")
+    args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+
+    device = torch.device(
+        args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    )
+    if device.type == "cuda":
+        print(f"Using device: {device} ({torch.cuda.get_device_name(device)})")
+        torch.backends.cudnn.benchmark = True
+    else:
+        print(f"Using device: {device} (CUDA not available)")
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+
+    model = AlphaZeroTransform(board_size=args.board_size).to(device)
+    if args.resume and os.path.isfile(args.resume):
+        from src.model_loader import load_weights
+        load_weights(model, args.resume, device)
+        print(f"Resumed from {args.resume}")
+
+    bot = Bot(
+        model=model,
+        board_size=args.board_size,
+        device=device,
+        num_simulations=args.num_simulations,
+        compile_model=not args.no_compile,
+        mcts_batch_size=args.mcts_batch_size,
+    )
+    optimizer = torch.optim.Adam(bot.model.parameters(), lr=args.learning_rate)
+
+    buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
+    buffer_max_size = args.games_per_iteration * 200  # rough upper bound positions per game
+    best_loss = float("inf")
+    total_iterations = args.iterations
+
+    def log_self_play(current: int, total: int) -> None:
+        msg = progress_bar(current, total, width=25, prefix="  Self-play ", suffix=" games")
+        sys.stdout.write(f"\r{msg}")
+        sys.stdout.flush()
+
+    def log_train(epoch: int, total_epochs: int, batch: int, total_batches: int) -> None:
+        step = (epoch * total_batches + batch) / max(1, total_epochs * total_batches)
+        filled = int(25 * step)
+        bar = "=" * max(0, filled - 1) + (">" if filled > 0 else "") + " " * max(0, 25 - filled)
+        pct = 100.0 * step
+        sys.stdout.write(
+            f"\r  Train     [{bar}] {pct:5.1f}% (epoch {epoch + 1}/{total_epochs}, batch {batch + 1}/{total_batches})"
+        )
+        sys.stdout.flush()
+
+    for iteration in range(1, total_iterations + 1):
+        # Overall iteration progress
+        iter_msg = progress_bar(iteration, total_iterations, width=30, prefix="Iteration ", suffix="")
+        print(iter_msg)
+
+        # Self-play with progress bar (same line, updated)
+        new_data = self_play(
+            bot,
+            args.board_size,
+            args.games_per_iteration,
+            progress_callback=log_self_play,
+        )
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        sys.stdout.flush()
+        buffer.extend(new_data)
+        if len(buffer) > buffer_max_size:
+            buffer = buffer[-buffer_max_size:]
+
+        # Train for several epochs on current buffer
+        random.shuffle(buffer)
+        total_pl = 0.0
+        total_vl = 0.0
+        n_batches = 0
+        batches_per_epoch = max(1, len(buffer) // args.batch_size)
+        for epoch in range(args.train_epochs):
+            for start in range(0, len(buffer), args.batch_size):
+                batch = buffer[start : start + args.batch_size]
+                if len(batch) < 2:
+                    continue
+                log_train(epoch, args.train_epochs, start // args.batch_size, batches_per_epoch)
+                pl, vl = train_step(
+                    batch, bot.model, optimizer, args.board_size, device, args.value_coef
+                )
+                total_pl += pl
+                total_vl += vl
+                n_batches += 1
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        sys.stdout.flush()
+
+        if n_batches > 0:
+            avg_pl = total_pl / n_batches
+            avg_vl = total_vl / n_batches
+            avg_loss = avg_pl + args.value_coef * avg_vl
+            print(
+                f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} buffer={len(buffer)}"
+            )
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                save_model_weights(bot.model, args.save_best_path)
+                print(f"  -> saved best to {args.save_best_path}")
+
+        if iteration % 5 == 0 or iteration == total_iterations:
+            ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
+            save_model_weights(bot.model, ckpt_path)
+            print(f"  -> checkpoint {ckpt_path}")
+
+    print(progress_bar(total_iterations, total_iterations, width=30, prefix="Done.       ", suffix=""))
+    print("Training complete.")
+
+
+if __name__ == "__main__":
+    main()
