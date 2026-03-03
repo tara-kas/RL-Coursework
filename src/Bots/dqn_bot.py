@@ -14,7 +14,7 @@ import keras
 import sys
 from collections import deque
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, LeakyReLU
+from keras.layers import Dense, Dropout, LeakyReLU, BatchNormalization
 from keras.optimizers import Adam
 from keras import optimizers
 
@@ -31,7 +31,7 @@ class DQNBot(BaseBot):
         self.gamma = 0.75
         
         # exploration/exploitation
-        self.epsilon = 0
+        self.epsilon = 1e-07
         self.epsilon_min = 0.0
         self.epsilon_decay = 0.99995
         
@@ -42,11 +42,39 @@ class DQNBot(BaseBot):
         # neural network for deep-Q
         model = Sequential()
         
-        # add layers to nn
-        model.add(Dense(256, input_dim=self.state_size, activation="linear"))
+        # input layer
+        model.add(Dense(1024, input_dim=self.state_size, activation="linear"))
         model.add(LeakyReLU(negative_slope=0.01))
+        model.add(BatchNormalization())
+
+        # hidden layers
+        model.add(Dense(1024, activation="linear"))
+        model.add(LeakyReLU(negative_slope=0.01))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.2))
+        
+        model.add(Dense(512, activation="linear"))
+        model.add(LeakyReLU(negative_slope=0.01))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.2))
+
+        model.add(Dense(512, activation="linear"))
+        model.add(LeakyReLU(negative_slope=0.01))
+        model.add(BatchNormalization())
+
+        model.add(Dense(256, activation="linear"))
+        model.add(LeakyReLU(negative_slope=0.01))
+        model.add(BatchNormalization())
+
+        model.add(Dense(256, activation="linear"))
+        model.add(LeakyReLU(negative_slope=0.01))
+        
+        # output layer
         model.add(Dense(self.action_size, activation="linear"))
+
         model.compile(loss='mse',optimizer=keras.optimizers.RMSprop(lr=self.learning_rate,rho=0.9, epsilon=self.epsilon, decay=self.epsilon_decay))
+    
+        return model    
     
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
