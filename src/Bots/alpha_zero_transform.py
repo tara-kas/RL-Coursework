@@ -17,6 +17,10 @@ def _maybe_compile(model: nn.Module, enable: bool = True) -> nn.Module:
     """Compile model with torch.compile if PyTorch >= 2 and enable is True. First run may be slow (tracing)."""
     if not enable:
         return model
+    # torch.compile with inductor requires Triton, which is not supported on Windows
+    import sys
+    if sys.platform == "win32":
+        return model
     try:
         if hasattr(torch, "compile") and tuple(int(x) for x in torch.__version__.split(".")[:2]) >= (2, 0):
             return torch.compile(model, mode="reduce-overhead")

@@ -175,6 +175,7 @@ def main() -> None:
     if device.type == "cuda":
         print(f"Using device: {device} ({torch.cuda.get_device_name(device)})")
         torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
     else:
         print(f"Using device: {device} (CUDA not available)")
     os.makedirs(args.checkpoint_dir, exist_ok=True)
