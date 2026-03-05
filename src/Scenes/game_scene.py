@@ -24,7 +24,7 @@ COLOURS = {
 
 
 class GameScene(Scene):
-    def __init__(self, scene_manager: SceneManager):
+    def __init__(self, scene_manager: SceneManager, weights_path: str | None = None):
         super().__init__(scene_manager)
         
         self.padding_x_L = 24
@@ -78,10 +78,11 @@ class GameScene(Scene):
         self.bottom_x = self.top_x + num_gaps * tile_size
         self.bottom_y = self.top_y + num_gaps * tile_size
 
+        alpha_zero_weights = weights_path if weights_path is not None else DEFAULT_WEIGHTS_PATH
         users = [
             {"type": "player", "name": "player1", "colour": (0,0,255)},
             {"type": "bot", "name": "AlphaZero", "file": "alpha_zero_transform", "colour": (255,0,0),
-             "bot_kwargs": {"weights_path": DEFAULT_WEIGHTS_PATH}},
+             "bot_kwargs": {"weights_path": alpha_zero_weights}},
         ]
         self.game_logic = GameLogic(users=users)
         

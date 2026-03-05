@@ -181,10 +181,18 @@ def main() -> None:
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     model = AlphaZeroTransform(board_size=args.board_size).to(device)
+    iteration_offset = 0
     if args.resume and os.path.isfile(args.resume):
         from src.model_loader import load_weights
         load_weights(model, args.resume, device)
         print(f"Resumed from {args.resume}")
+        # Continue checkpoint numbering from the resumed file (e.g. checkpoint_100.pt -> next is 101)
+        base = os.path.basename(args.resume)
+        if base.startswith("checkpoint_") and base.endswith(".pt"):
+            try:
+                iteration_offset = int(base[len("checkpoint_") : -len(".pt")])
+            except ValueError:
+                pass
 
     bot = Bot(
         model=model,
@@ -216,9 +224,11 @@ def main() -> None:
         )
         sys.stdout.flush()
 
-    for iteration in range(1, total_iterations + 1):
-        # Overall iteration progress
-        iter_msg = progress_bar(iteration, total_iterations, width=30, prefix="Iteration ", suffix="")
+    total_display = iteration_offset + total_iterations
+    for i in range(total_iterations):
+        iteration = iteration_offset + i + 1
+        # Overall iteration progress (e.g. "Iteration 101/600")
+        iter_msg = progress_bar(iteration, total_display, width=30, prefix="Iteration ", suffix="")
         print(iter_msg)
 
         # Self-play with progress bar (same line, updated)
@@ -267,12 +277,12 @@ def main() -> None:
                 save_model_weights(bot.model, args.save_best_path)
                 print(f"  -> saved best to {args.save_best_path}")
 
-        if iteration % 5 == 0 or iteration == total_iterations:
+        if iteration % 5 == 0 or iteration == total_display:
             ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
             save_model_weights(bot.model, ckpt_path)
             print(f"  -> checkpoint {ckpt_path}")
 
-    print(progress_bar(total_iterations, total_iterations, width=30, prefix="Done.       ", suffix=""))
+    print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))
     print("Training complete.")
 
 

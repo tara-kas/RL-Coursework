@@ -89,3 +89,11 @@ One-off use: `predict(board_state, current_player=None, weights_path=..., **kwar
 - `src/model_loader.py` – Default weights path, `save_weights()`, `load_weights()`.
 - `src/Bots/random.py` – Random-move bot.
 - `src/Scenes/` – Pygame scenes (game UI).
+
+
+## Useful Commands
+
+Training script:
+```bash
+uv run python train.py --resume weights/checkpoint_180.pt --iterations 500 --value_coef 2.0 --num_simulations 100 --games_per_iteration 150 --learning_rate 2e-4
+```
