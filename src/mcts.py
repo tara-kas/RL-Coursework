@@ -190,11 +190,13 @@ def run_mcts_with_policy(
     batch_size: int = 32,
     c_puct: float = 1.5,
     device: torch.device | None = None,
+    temperature: float = 0.0,
 ) -> tuple[tuple[int, int], np.ndarray]:
     """
     Run MCTS and return the best move and the root visit distribution (policy target).
-    Returns (best_move, policy) where policy is shape (board_size**2,) with probabilities
-    on legal moves summing to 1.
+    Returns (chosen_move, policy) where policy is shape (board_size**2,) with probabilities
+    on legal moves summing to 1. If temperature > 0, chosen_move is sampled from
+    N^(1/temperature); otherwise argmax over visit counts.
     """
     if device is None:
         device = next(model.parameters()).device
@@ -223,6 +225,16 @@ def run_mcts_with_policy(
             i, j = move
             policy[i * board_size + j] = root.children[move].N / total_visits
 
-    best_move = max(legal_moves, key=lambda m: root.children[m].N if m in root.children else 0)
+    if temperature <= 0.0:
+        chosen_move = max(legal_moves, key=lambda m: root.children[m].N if m in root.children else 0)
+    else:
+        visits = np.array(
+            [root.children[m].N if m in root.children else 0 for m in legal_moves],
+            dtype=np.float64,
+        )
+        probs = np.power(visits + 1e-8, 1.0 / temperature)
+        probs /= probs.sum()
+        idx = np.random.choice(len(legal_moves), p=probs)
+        chosen_move = legal_moves[idx]
 
-    return best_move, policy
+    return chosen_move, policy

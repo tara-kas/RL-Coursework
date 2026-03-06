@@ -20,7 +20,8 @@ from src.gomoku_game import (
 )
 from src.gomoku_utils import preprocess_board
 from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot
-from src.model_loader import save_weights as save_model_weights
+from src.Bots.heuristic_tactical import predict as heuristic_predict
+from src.model_loader import save_weights as save_model_weights, load_weights
 
 
 def progress_bar(
@@ -49,10 +50,17 @@ def self_play(
     board_size: int,
     num_games: int,
     c_puct: float = 1.5,
+    self_play_temp: float = 1.0,
+    temp_moves: int = 30,
     progress_callback: Callable[[int, int], None] | None = None,
+    league_bot: Bot | None = None,
+    league_prob: float = 0.0,
+    heuristic_prob: float = 0.0,
 ) -> list[tuple[np.ndarray, int, np.ndarray, float]]:
     """
-    Run num_games of self-play using the bot's model. Returns a list of (board, current_player, policy, z).
+    Run num_games. Each game is self-play, league (vs league_bot), or heuristic (vs tactical bot)
+    with probabilities (1 - league_prob - heuristic_prob), league_prob, heuristic_prob.
+    Returns list of (board, current_player, policy, z).
     """
     bot.model.eval()
     buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
@@ -60,35 +68,54 @@ def self_play(
     for g in range(num_games):
         if progress_callback is not None:
             progress_callback(g + 1, num_games)
+        r = random.random()
+        if league_bot is not None and r < league_prob:
+            opponent = league_bot
+        elif r < league_prob + heuristic_prob:
+            opponent = heuristic_predict
+        else:
+            opponent = None
+
         board = np.full((board_size, board_size), -1, dtype=np.int32)
         current_player = 0
         game_history: list[tuple[np.ndarray, int, np.ndarray]] = []
 
         while True:
-            move, policy = bot.get_move_and_policy(
-                board.copy(),
-                current_player,
-                c_puct=c_puct,
-            )
-            game_history.append((board.copy(), current_player, policy))
+            if opponent is None or current_player == 0:
+                temp = self_play_temp if len(game_history) < temp_moves else 0.0
+                move, policy = bot.get_move_and_policy(
+                    board.copy(),
+                    current_player,
+                    c_puct=c_puct,
+                    temperature=temp,
+                )
+                if opponent is None:
+                    game_history.append((board.copy(), current_player, policy))
+                else:
+                    game_history.append((board.copy(), 0, policy))
+            else:
+                if hasattr(opponent, "predict"):
+                    move = opponent.predict(board.copy(), current_player)
+                else:
+                    move = opponent(board.copy(), current_player)
 
             board = apply_move(board, move, current_player)
             result = get_game_result(board, move, current_player)
 
             if result != GAME_NOT_OVER:
-                # Assign value z from the perspective of the player who was to move in each step
                 if result == WIN:
                     winner = current_player
                 else:
-                    winner = -1  # draw
-                for b, p, pi in game_history:
-                    if winner == -1:
-                        z = 0.0
-                    else:
-                        z = 1.0 if p == winner else -1.0
-                    buffer.append((b, p, pi, z))
+                    winner = -1
+                if opponent is not None:
+                    z = 1.0 if winner == 0 else (-1.0 if winner == 1 else 0.0)
+                    for b, _p, pi in game_history:
+                        buffer.append((b, 0, pi, z))
+                else:
+                    for b, p, pi in game_history:
+                        z = 0.0 if winner == -1 else (1.0 if p == winner else -1.0)
+                        buffer.append((b, p, pi, z))
                 break
-
             current_player = 1 - current_player
 
     return buffer
@@ -162,6 +189,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--no-compile", action="store_true", help="Disable torch.compile for the model")
     parser.add_argument("--mcts_batch_size", type=int, default=32, help="Batch size for MCTS leaf evaluation")
+    parser.add_argument("--c_puct", type=float, default=1.5, help="MCTS exploration constant")
+    parser.add_argument("--self_play_temp", type=float, default=1.0, help="Temperature for move sampling in self-play (first temp_moves)")
+    parser.add_argument("--temp_moves", type=int, default=30, help="Number of moves per game with temperature; after that argmax")
+    parser.add_argument("--league_prob", type=float, default=0.25, help="Probability of playing vs a past checkpoint")
+    parser.add_argument("--heuristic_prob", type=float, default=0.2, help="Probability of playing vs heuristic tactical bot")
+    parser.add_argument("--league_pool_size", type=int, default=5, help="Max past checkpoints to keep in league pool")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -208,6 +241,7 @@ def main() -> None:
     buffer_max_size = args.games_per_iteration * 200  # rough upper bound positions per game
     best_loss = float("inf")
     total_iterations = args.iterations
+    checkpoint_pool: list[str] = []
 
     def log_self_play(current: int, total: int) -> None:
         msg = progress_bar(current, total, width=25, prefix="  Self-play ", suffix=" games")
@@ -231,12 +265,34 @@ def main() -> None:
         iter_msg = progress_bar(iteration, total_display, width=30, prefix="Iteration ", suffix="")
         print(iter_msg)
 
+        # Load one league opponent from pool for this iteration (if any)
+        league_bot: Bot | None = None
+        if checkpoint_pool and args.league_prob > 0:
+            path = random.choice(checkpoint_pool)
+            league_model = AlphaZeroTransform(board_size=args.board_size).to(device)
+            load_weights(league_model, path, device)
+            league_bot = Bot(
+                model=league_model,
+                board_size=args.board_size,
+                device=device,
+                num_simulations=args.num_simulations,
+                compile_model=not args.no_compile,
+                mcts_batch_size=args.mcts_batch_size,
+            )
+            league_bot.model.eval()
+
         # Self-play with progress bar (same line, updated)
         new_data = self_play(
             bot,
             args.board_size,
             args.games_per_iteration,
+            c_puct=args.c_puct,
+            self_play_temp=args.self_play_temp,
+            temp_moves=args.temp_moves,
             progress_callback=log_self_play,
+            league_bot=league_bot,
+            league_prob=args.league_prob,
+            heuristic_prob=args.heuristic_prob,
         )
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
@@ -277,9 +333,12 @@ def main() -> None:
                 save_model_weights(bot.model, args.save_best_path)
                 print(f"  -> saved best to {args.save_best_path}")
 
+        # Save checkpoint every iteration (for league pool) and every 5 for convenience
+        ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
+        save_model_weights(bot.model, ckpt_path)
+        checkpoint_pool.append(ckpt_path)
+        checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
         if iteration % 5 == 0 or iteration == total_display:
-            ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
-            save_model_weights(bot.model, ckpt_path)
             print(f"  -> checkpoint {ckpt_path}")
 
     print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))

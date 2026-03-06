@@ -119,9 +119,11 @@ class Bot(BaseBot):
         board: np.ndarray,
         current_player: int,
         c_puct: float = 1.5,
+        temperature: float = 0.0,
     ) -> tuple[tuple[int, int], np.ndarray]:
         """
         Run MCTS and return (move, policy) for self-play training. Uses this bot's model.
+        When temperature > 0, move is sampled from visit distribution; otherwise argmax.
         """
         return run_mcts_with_policy(
             board,
@@ -132,6 +134,7 @@ class Bot(BaseBot):
             batch_size=self.mcts_batch_size,
             c_puct=c_puct,
             device=self.device,
+            temperature=temperature,
         )
 
     def move(self, game_state: GameState) -> tuple[int, int] | None:
