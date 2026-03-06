@@ -216,7 +216,6 @@ def main() -> None:
     model = AlphaZeroTransform(board_size=args.board_size).to(device)
     iteration_offset = 0
     if args.resume and os.path.isfile(args.resume):
-        from src.model_loader import load_weights
         load_weights(model, args.resume, device)
         print(f"Resumed from {args.resume}")
         # Continue checkpoint numbering from the resumed file (e.g. checkpoint_100.pt -> next is 101)
