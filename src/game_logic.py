@@ -18,7 +18,7 @@ class GameLogic():
 
         for user in self.users:
             if user["type"] == "bot":
-                self.bots[user["name"]] = self.load_bot(user["file"])
+                self.bots[user["name"]] = self.load_bot(user["file"], user)
         
         self.game_state = GameState(grid_x, grid_y)
         self.move_mask = np.zeros((grid_x, grid_y), dtype=object)
@@ -38,7 +38,7 @@ class GameLogic():
         return self.game_state.board[x, y] == -1
     
     def get_valid_moves(self) -> list:
-        res = np.where(self.game_state == -1, self.move_mask, 0)
+        res = np.where(self.game_state.board == -1, self.move_mask, 0)
         valid = np.nonzero(res)
         posified = [(x,y) for x,y in zip(valid[0], valid[1])]
         return posified
@@ -56,17 +56,17 @@ class GameLogic():
     def next_turn(self):
         self.current_turn = (self.current_turn + 1) % len(self.users)
 
-    def load_bot(self, file_name:str) -> object:
+    def load_bot(self, file_name: str, user: dict | None = None) -> object:
         # Load the bot module from the file name
         try:
             module = importlib.import_module(f"src.Bots.{file_name}")
-            
-            # Create instance of bot
+
+            # Create instance of bot (optional kwargs from user, e.g. weights_path)
             if hasattr(module, "Bot"):
                 bot_class = getattr(module, "Bot")
-                
-                instance = bot_class()
-                
+                kwargs = user.get("bot_kwargs", {}) if user else {}
+                instance = bot_class(**kwargs)
+
                 return instance
             else:
                 print(f"No Bot class found in {file_name}.py")
@@ -82,6 +82,7 @@ class GameLogic():
             raise KeyError(f"Bot {bot_name} not found.")
 
         bot = self.bots[bot_name]
+        self.game_state.current_player = self.current_turn
 
         if hasattr(bot, "move"):
             move = bot.move(self.game_state, **kwargs)

@@ -7,5 +7,5 @@ class BaseBot(ABC):
         pass
 
     @abstractmethod
-    def move(self, game_state:GameState) -> tuple[int, int]:
+    def move(self, game_state:GameState) -> tuple[int, int] | None:
         pass
