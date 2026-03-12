@@ -84,6 +84,7 @@ def _run_mcts_simulations(
     c_puct: float,
     device: torch.device,
     batch_size: int = 32,
+    use_amp: bool = False,
 ) -> None:
     """Run num_simulations MCTS iterations from root in batches. Mutates root and its tree."""
     planes_batch = torch.empty(
@@ -126,7 +127,11 @@ def _run_mcts_simulations(
                 mask_batch[u, idx] = 1.0
 
         with torch.inference_mode():
-            policy_batch, value_batch = model(planes_batch[:n_unique], mask_batch[:n_unique])
+            if use_amp and device.type == "cuda":
+                with torch.autocast(device_type="cuda"):
+                    policy_batch, value_batch = model(planes_batch[:n_unique], mask_batch[:n_unique])
+            else:
+                policy_batch, value_batch = model(planes_batch[:n_unique], mask_batch[:n_unique])
 
         value_batch = value_batch.cpu().numpy().ravel()
         policy_batch = policy_batch.cpu().numpy()
@@ -150,7 +155,8 @@ def _run_mcts_simulations(
             _backup_path(path, value)
 
 
-def run_mcts(board: np.ndarray,
+def run_mcts(
+    board: np.ndarray,
     current_player: int,
     model: nn.Module,
     board_size: int,
@@ -158,6 +164,7 @@ def run_mcts(board: np.ndarray,
     batch_size: int = 32,
     c_puct: float = 1.5,
     device: torch.device | None = None,
+    use_amp: bool = False,
 ) -> tuple[int, int]:
     """
     Run MCTS from the given state and return the best move.
@@ -174,7 +181,7 @@ def run_mcts(board: np.ndarray,
     if len(legal_moves) == 1:
         return legal_moves[0]
 
-    _run_mcts_simulations(root, legal_moves, model, board_size, num_simulations, c_puct, device, batch_size)
+    _run_mcts_simulations(root, legal_moves, model, board_size, num_simulations, c_puct, device, batch_size, use_amp)
 
     best_move = max(legal_moves, key=lambda m: root.children[m].N if m in root.children else 0)
 
@@ -191,6 +198,7 @@ def run_mcts_with_policy(
     c_puct: float = 1.5,
     device: torch.device | None = None,
     temperature: float = 0.0,
+    use_amp: bool = False,
 ) -> tuple[tuple[int, int], np.ndarray]:
     """
     Run MCTS and return the best move and the root visit distribution (policy target).
@@ -213,7 +221,7 @@ def run_mcts_with_policy(
         policy[i * board_size + j] = 1.0
         return legal_moves[0], policy
 
-    _run_mcts_simulations(root, legal_moves, model, board_size, num_simulations, c_puct, device, batch_size)
+    _run_mcts_simulations(root, legal_moves, model, board_size, num_simulations, c_puct, device, batch_size, use_amp)
 
     total_visits = sum(root.children[m].N for m in legal_moves if m in root.children)
     if total_visits == 0:

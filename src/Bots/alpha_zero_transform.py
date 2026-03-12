@@ -62,6 +62,7 @@ class Bot(BaseBot):
         model: nn.Module | None = None,
         compile_model: bool = True,
         mcts_batch_size: int = 32,
+        use_amp: bool = False,
     ):
         super().__init__()
 
@@ -72,6 +73,7 @@ class Bot(BaseBot):
         self.num_simulations = num_simulations
         self.board_size = board_size
         self.mcts_batch_size = mcts_batch_size
+        self.use_amp = use_amp
 
         if model is not None:
             self.model = model.to(self.device)
@@ -111,6 +113,7 @@ class Bot(BaseBot):
             batch_size=self.mcts_batch_size,
             c_puct=1.5,
             device=self.device,
+            use_amp=self.use_amp,
         )
         return move
 
@@ -135,6 +138,7 @@ class Bot(BaseBot):
             c_puct=c_puct,
             device=self.device,
             temperature=temperature,
+            use_amp=self.use_amp,
         )
 
     def move(self, game_state: GameState) -> tuple[int, int] | None:
@@ -154,6 +158,7 @@ class Bot(BaseBot):
             batch_size=self.mcts_batch_size,
             c_puct=1.5,
             device=self.device,
+            use_amp=self.use_amp,
         )
 
 
@@ -215,7 +220,7 @@ class AlphaZeroTransform(nn.Module):
         logits = self.policy_head(features)
 
         if mask is not None:
-            logits = logits.masked_fill(mask == 0, -1e9)
+            logits = logits.masked_fill(mask == 0, -1e4)
 
         policy = F.softmax(logits, dim=-1)
 

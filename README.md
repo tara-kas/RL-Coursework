@@ -56,6 +56,9 @@ Optional arguments:
 - `--league_prob` (default: 0.25) – probability each game is played vs a random past checkpoint
 - `--heuristic_prob` (default: 0.2) – probability each game is played vs the heuristic tactical bot (win/block-4)
 - `--league_pool_size` (default: 5) – max number of past checkpoints kept in the league pool
+- `--amp` – use FP16 autocast in MCTS for faster inference on GPU
+- `--num_workers` (default: 1) – number of parallel self-play workers (1 = no parallelism; workers run on CPU by default)
+- `--worker_device` (default: cpu) – device for parallel workers; main process keeps GPU for training
 
 **Note:** With PyTorch 2+, the model is compiled by default for faster inference. The first run after starting training may be slower due to tracing; later runs are faster. Use `--no-compile` to disable compilation.
 
@@ -112,3 +115,11 @@ uv run python train.py --resume weights/checkpoint_100.pt --iterations 500 --val
 ```
 
 uv run python train.py --iterations 500 --num_simulations 200 --games_per_iteration 150 --learning_rate 2e-4 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.25 --heuristic_prob 0.2 --resume weights/checkpoint_4.pt
+
+uv run python train.py --amp --num_workers 4 --iterations 500 --num_simulations 100 --games_per_iteration 150
+
+
+combined:
+
+uv run python train.py --amp --num_workers 8 --iterations 500 --num_simulations 200 --games_per_iteration 150 --learning_rate 2e-4 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.25 --heuristic_prob 0.2 --resume weights/checkpoint_163.pt
+

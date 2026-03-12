@@ -3,6 +3,8 @@ Standalone AlphaZero self-play training for Gomoku. No Pygame/UI dependencies.
 Run: python train.py [--options]
 """
 import argparse
+import math
+import multiprocessing
 import os
 import random
 import sys
@@ -121,6 +123,77 @@ def self_play(
     return buffer
 
 
+def _worker_self_play(
+    worker_id: int,
+    state_dict: dict,
+    num_games: int,
+    board_size: int,
+    num_simulations: int,
+    mcts_batch_size: int,
+    c_puct: float,
+    self_play_temp: float,
+    temp_moves: int,
+    league_prob: float,
+    heuristic_prob: float,
+    league_path: str | None,
+    device_str: str,
+    seed_base: int | None,
+    use_amp: bool,
+    compile_model: bool,
+) -> list[tuple[np.ndarray, int, np.ndarray, float]]:
+    """
+    Worker for parallel self-play. Loads model from state_dict, runs num_games, returns buffer.
+    Must be top-level for pickling in multiprocessing.
+    """
+    if seed_base is not None:
+        random.seed(seed_base + worker_id)
+        np.random.seed(seed_base + worker_id)
+        torch.manual_seed(seed_base + worker_id)
+
+    device = torch.device(device_str)
+    model = AlphaZeroTransform(board_size=board_size).to(device)
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+
+    bot = Bot(
+        model=model,
+        board_size=board_size,
+        device=device,
+        num_simulations=num_simulations,
+        compile_model=compile_model,
+        mcts_batch_size=mcts_batch_size,
+        use_amp=use_amp,
+    )
+
+    league_bot: Bot | None = None
+    if league_path and league_prob > 0 and os.path.isfile(league_path):
+        league_model = AlphaZeroTransform(board_size=board_size).to(device)
+        load_weights(league_model, league_path, device)
+        league_bot = Bot(
+            model=league_model,
+            board_size=board_size,
+            device=device,
+            num_simulations=num_simulations,
+            compile_model=compile_model,
+            mcts_batch_size=mcts_batch_size,
+            use_amp=use_amp,
+        )
+        league_bot.model.eval()
+
+    return self_play(
+        bot,
+        board_size,
+        num_games,
+        c_puct=c_puct,
+        self_play_temp=self_play_temp,
+        temp_moves=temp_moves,
+        progress_callback=None,
+        league_bot=league_bot,
+        league_prob=league_prob,
+        heuristic_prob=heuristic_prob,
+    )
+
+
 def train_step(
     batch: list[tuple[np.ndarray, int, np.ndarray, float]],
     model: torch.nn.Module,
@@ -195,6 +268,9 @@ def main() -> None:
     parser.add_argument("--league_prob", type=float, default=0.25, help="Probability of playing vs a past checkpoint")
     parser.add_argument("--heuristic_prob", type=float, default=0.2, help="Probability of playing vs heuristic tactical bot")
     parser.add_argument("--league_pool_size", type=int, default=5, help="Max past checkpoints to keep in league pool")
+    parser.add_argument("--amp", action="store_true", help="Use FP16 autocast in MCTS")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel self-play workers (1 = no parallelism)")
+    parser.add_argument("--worker_device", type=str, default="cpu", help="Device for parallel workers (main process keeps GPU for training)")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -233,6 +309,7 @@ def main() -> None:
         num_simulations=args.num_simulations,
         compile_model=not args.no_compile,
         mcts_batch_size=args.mcts_batch_size,
+        use_amp=args.amp,
     )
     optimizer = torch.optim.Adam(bot.model.parameters(), lr=args.learning_rate)
 
@@ -264,35 +341,74 @@ def main() -> None:
         iter_msg = progress_bar(iteration, total_display, width=30, prefix="Iteration ", suffix="")
         print(iter_msg)
 
-        # Load one league opponent from pool for this iteration (if any)
+        # Select league path for this iteration (if any)
+        league_path: str | None = None
         league_bot: Bot | None = None
         if checkpoint_pool and args.league_prob > 0:
-            path = random.choice(checkpoint_pool)
-            league_model = AlphaZeroTransform(board_size=args.board_size).to(device)
-            load_weights(league_model, path, device)
-            league_bot = Bot(
-                model=league_model,
-                board_size=args.board_size,
-                device=device,
-                num_simulations=args.num_simulations,
-                compile_model=not args.no_compile,
-                mcts_batch_size=args.mcts_batch_size,
-            )
-            league_bot.model.eval()
+            league_path = random.choice(checkpoint_pool)
+            if args.num_workers == 1:
+                league_model = AlphaZeroTransform(board_size=args.board_size).to(device)
+                load_weights(league_model, league_path, device)
+                league_bot = Bot(
+                    model=league_model,
+                    board_size=args.board_size,
+                    device=device,
+                    num_simulations=args.num_simulations,
+                    compile_model=not args.no_compile,
+                    mcts_batch_size=args.mcts_batch_size,
+                    use_amp=args.amp,
+                )
+                league_bot.model.eval()
 
-        # Self-play with progress bar (same line, updated)
-        new_data = self_play(
-            bot,
-            args.board_size,
-            args.games_per_iteration,
-            c_puct=args.c_puct,
-            self_play_temp=args.self_play_temp,
-            temp_moves=args.temp_moves,
-            progress_callback=log_self_play,
-            league_bot=league_bot,
-            league_prob=args.league_prob,
-            heuristic_prob=args.heuristic_prob,
-        )
+        # Self-play: parallel workers or single process
+        if args.num_workers <= 1:
+            new_data = self_play(
+                bot,
+                args.board_size,
+                args.games_per_iteration,
+                c_puct=args.c_puct,
+                self_play_temp=args.self_play_temp,
+                temp_moves=args.temp_moves,
+                progress_callback=log_self_play,
+                league_bot=league_bot,
+                league_prob=args.league_prob,
+                heuristic_prob=args.heuristic_prob,
+            )
+        else:
+            chunk_size = math.ceil(args.games_per_iteration / args.num_workers)
+            worker_args = []
+            for w in range(args.num_workers):
+                games_this_worker = min(
+                    chunk_size,
+                    args.games_per_iteration - w * chunk_size,
+                )
+                if games_this_worker <= 0:
+                    continue
+                worker_args.append(
+                    (
+                        w,
+                        {k: v.cpu().clone() for k, v in bot.model.state_dict().items()},
+                        games_this_worker,
+                        args.board_size,
+                        args.num_simulations,
+                        args.mcts_batch_size,
+                        args.c_puct,
+                        args.self_play_temp,
+                        args.temp_moves,
+                        args.league_prob,
+                        args.heuristic_prob,
+                        league_path,
+                        args.worker_device,
+                        args.seed,
+                        args.amp,
+                        not args.no_compile,
+                    )
+                )
+            with multiprocessing.Pool(args.num_workers) as pool:
+                results = pool.starmap(_worker_self_play, worker_args)
+            new_data = [item for sublist in results for item in sublist]
+            print(f"  Self-play  [{'=' * 25}] 100.0% ({args.games_per_iteration}/{args.games_per_iteration}) games")
+
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
         buffer.extend(new_data)
