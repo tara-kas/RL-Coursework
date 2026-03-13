@@ -90,8 +90,6 @@ class GameScene(Scene):
         bot_name = "DQN" if is_dqn else "AlphaZero"
 
         bot_kwargs: dict[str, object] = {"weights_path": weights, "board_size": board_size}
-        if is_dqn:
-            bot_kwargs["action_size"] = board_size * board_size
 
         users = [
             {"type": "player", "name": "player1", "colour": (0,0,255)},
