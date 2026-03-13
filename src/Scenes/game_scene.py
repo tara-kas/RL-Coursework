@@ -25,7 +25,12 @@ COLOURS = {
 
 
 class GameScene(Scene):
-    def __init__(self, scene_manager: SceneManager, weights_path: str | None = None):
+    def __init__(
+        self,
+        scene_manager: SceneManager,
+        weights_path: str | None = None,
+        board_size: int = 15,
+    ):
         super().__init__(scene_manager)
         
         self.padding_x_L = 24
@@ -40,12 +45,12 @@ class GameScene(Scene):
         self.panel_bottom_x = screen_width - self.padding_x_R
         self.panel_bottom_y = screen_height - self.padding_y_B
         
-        self.grid_x = 15
-        self.grid_y = 15
+        self.grid_x = board_size
+        self.grid_y = board_size
         
-        # 15x15 playable grid in the middle
-        num_gaps = self.grid_x - 1  # 14 gaps between 15 intersections
-        num_slots = num_gaps + 2   # 16 slots for grid and margin
+        # Playable grid in the middle
+        num_gaps = self.grid_x - 1
+        num_slots = num_gaps + 2   # slots for grid and margin
         
         self.board_padding = 14
         
@@ -73,7 +78,7 @@ class GameScene(Scene):
             play_h + 2 * self.board_padding,
         )
         
-        # Playable 15x15 grid is inset by one tile from the board surface (not on the outline)
+        # Playable grid is inset by one tile from the board surface (not on the outline)
         self.top_x = self.play_top_x + tile_size
         self.top_y = self.play_top_y + tile_size
         self.bottom_x = self.top_x + num_gaps * tile_size
@@ -83,12 +88,22 @@ class GameScene(Scene):
         is_dqn = weights and "dqn" in os.path.basename(weights).lower()
         bot_file = "dqn" if is_dqn else "alpha_zero_transform"
         bot_name = "DQN" if is_dqn else "AlphaZero"
+
+        bot_kwargs: dict[str, object] = {"weights_path": weights, "board_size": board_size}
+        if is_dqn:
+            bot_kwargs["action_size"] = board_size * board_size
+
         users = [
             {"type": "player", "name": "player1", "colour": (0,0,255)},
-            {"type": "bot", "name": bot_name, "file": bot_file, "colour": (255,0,0),
-             "bot_kwargs": {"weights_path": weights}},
+            {
+                "type": "bot",
+                "name": bot_name,
+                "file": bot_file,
+                "colour": (255,0,0),
+                "bot_kwargs": bot_kwargs,
+            },
         ]
-        self.game_logic = GameLogic(users=users)
+        self.game_logic = GameLogic(grid_x=board_size, grid_y=board_size, users=users)
         
         self.mouse_x = 0
         self.mouse_y = 0

@@ -19,9 +19,13 @@ from keras.optimizers import Adam
 from keras import optimizers
 
 class DQNBot(BaseBot):
-    def __init__(self, board_size: int = 15, action_size: int = 225):
+    def __init__(self, board_size: int = 15, action_size: int | None = None):
         self.board_size = board_size
+        if action_size is None:
+            action_size = board_size * board_size
         self.action_size = action_size
+        # 3 planes (current, opponent, empty) flattened
+        self.state_size = 3 * board_size * board_size
         
         # initialise replay buffer that stores (action, state, reward, next_state, done) w/
         # max 8000 past games

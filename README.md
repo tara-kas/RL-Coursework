@@ -124,7 +124,8 @@ uv run python train.py --amp --num_workers 8 --iterations 500 --num_simulations 
 
 DQN:
 uv run python train.py --agent_type dqn --amp --iterations 1000 --games_per_iteration 200 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --heuristic_prob 0.2 --resume weights/dqn_checkpoint_290.pt
-uv run python train.py --agent_type dqn --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --heuristic_prob 0.2 --resume weights/dqn_checkpoint_500.pt
+
+uv run python train.py --board_size 9 --agent_type dqn --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --heuristic_prob 0.2 --resume weights/dqn_checkpoint_500.pt
 
 ### DQN training tips
 

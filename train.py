@@ -262,7 +262,13 @@ def main() -> None:
         choices=["alphazero", "dqn"],
         help="Agent type: alphazero (MCTS + policy/value) or dqn (Q-network + replay buffer)",
     )
-    parser.add_argument("--board_size", type=int, default=15)
+    parser.add_argument(
+        "--board_size",
+        type=int,
+        default=15,
+        choices=[9, 15],
+        help="Board size (must be 9 or 15)",
+    )
     parser.add_argument("--num_simulations", type=int, default=50)
     parser.add_argument("--games_per_iteration", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=64)

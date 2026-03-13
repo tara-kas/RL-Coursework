@@ -3,7 +3,15 @@ import sys
 from src.scene_manager import SceneManager
 
 class Window():
-    def __init__(self, width:int=1280, height:int=720, title:str="Game", current_scene:str="game", weights_path:str|None=None):
+    def __init__(
+        self,
+        width: int = 1280,
+        height: int = 720,
+        title: str = "Game",
+        current_scene: str = "game",
+        weights_path: str | None = None,
+        board_size: int = 15,
+    ):
         pygame.init()
         self.running = True
         
@@ -25,7 +33,11 @@ class Window():
         from src.Scenes.game_scene import GameScene
 
         self.scenes = {
-            "game": GameScene(self.scene_manager, weights_path=weights_path)
+            "game": GameScene(
+                self.scene_manager,
+                weights_path=weights_path,
+                board_size=board_size,
+            )
         }
 
     def handle_events(self):
