@@ -119,7 +119,14 @@ uv run python train.py --iterations 500 --num_simulations 200 --games_per_iterat
 uv run python train.py --amp --num_workers 4 --iterations 500 --num_simulations 100 --games_per_iteration 150
 
 
-combined:
-
+alphazero:
 uv run python train.py --amp --num_workers 8 --iterations 500 --num_simulations 200 --games_per_iteration 150 --learning_rate 2e-4 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.25 --heuristic_prob 0.2 --resume weights/checkpoint_163.pt
 
+DQN:
+uv run python train.py --agent_type dqn --amp --iterations 500 --games_per_iteration 150 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --heuristic_prob 0.2 --resume weights/dqn_checkpoint_2.pt
+
+### DQN training tips
+
+- **Longer runs**: Use 500+ iterations and a large replay buffer (e.g. `--replay_buffer_size 200000`) so value can propagate from terminal (+1/-1) back through many steps.
+- **Metrics beyond loss**: Watch the eval line (`Eval: vs_random win_rate=... vs_heuristic win_rate=...`). Low loss with low win rate means the network is fitting targets that do not yet encode a good policy; loss alone can be misleading with sparse rewards.
+- **Terminal oversampling**: Default `--dqn_terminal_fraction 0.5` increases the fraction of batches drawn from game-ending transitions so the TD target carries real value.

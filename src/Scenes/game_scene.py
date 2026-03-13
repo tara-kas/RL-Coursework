@@ -1,3 +1,4 @@
+import os
 import pygame
 import math
 import numpy as np
@@ -78,11 +79,14 @@ class GameScene(Scene):
         self.bottom_x = self.top_x + num_gaps * tile_size
         self.bottom_y = self.top_y + num_gaps * tile_size
 
-        alpha_zero_weights = weights_path if weights_path is not None else DEFAULT_WEIGHTS_PATH
+        weights = weights_path if weights_path is not None else DEFAULT_WEIGHTS_PATH
+        is_dqn = weights and "dqn" in os.path.basename(weights).lower()
+        bot_file = "dqn" if is_dqn else "alpha_zero_transform"
+        bot_name = "DQN" if is_dqn else "AlphaZero"
         users = [
             {"type": "player", "name": "player1", "colour": (0,0,255)},
-            {"type": "bot", "name": "AlphaZero", "file": "alpha_zero_transform", "colour": (255,0,0),
-             "bot_kwargs": {"weights_path": alpha_zero_weights}},
+            {"type": "bot", "name": bot_name, "file": bot_file, "colour": (255,0,0),
+             "bot_kwargs": {"weights_path": weights}},
         ]
         self.game_logic = GameLogic(users=users)
         

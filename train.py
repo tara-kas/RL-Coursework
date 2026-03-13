@@ -23,6 +23,14 @@ from src.gomoku_game import (
 from src.gomoku_utils import preprocess_board
 from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot
 from src.Bots.heuristic_tactical import predict as heuristic_predict
+from src.Bots.dqn import (
+    DQN,
+    ReplayBuffer,
+    get_epsilon,
+    dqn_self_play,
+    dqn_train_step,
+    evaluate_dqn,
+)
 from src.model_loader import save_weights as save_model_weights, load_weights
 
 
@@ -246,7 +254,14 @@ def train_step(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AlphaZero Gomoku self-play training")
+    parser = argparse.ArgumentParser(description="Gomoku self-play training (AlphaZero or DQN)")
+    parser.add_argument(
+        "--agent_type",
+        type=str,
+        default="alphazero",
+        choices=["alphazero", "dqn"],
+        help="Agent type: alphazero (MCTS + policy/value) or dqn (Q-network + replay buffer)",
+    )
     parser.add_argument("--board_size", type=int, default=15)
     parser.add_argument("--num_simulations", type=int, default=50)
     parser.add_argument("--games_per_iteration", type=int, default=100)
@@ -271,6 +286,17 @@ def main() -> None:
     parser.add_argument("--amp", action="store_true", help="Use FP16 autocast in MCTS")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel self-play workers (1 = no parallelism)")
     parser.add_argument("--worker_device", type=str, default="cpu", help="Device for parallel workers (main process keeps GPU for training)")
+    # DQN-specific (ignored when agent_type == alphazero)
+    parser.add_argument("--gamma", type=float, default=0.99, help="DQN discount factor")
+    parser.add_argument("--epsilon_start", type=float, default=1.0, help="DQN initial exploration")
+    parser.add_argument("--epsilon_end", type=float, default=0.05, help="DQN final exploration")
+    parser.add_argument("--epsilon_decay_steps", type=int, default=150000, help="DQN epsilon decay steps (longer exploration)")
+    parser.add_argument("--replay_buffer_size", type=int, default=100000, help="DQN replay buffer capacity")
+    parser.add_argument("--target_update_freq", type=int, default=1000, help="DQN target network sync interval (steps)")
+    parser.add_argument("--train_steps_per_iteration", type=int, default=500, help="DQN training steps per iteration")
+    parser.add_argument("--dqn_terminal_fraction", type=float, default=0.5, help="DQN fraction of batch from terminal transitions (stronger reward signal)")
+    parser.add_argument("--eval_freq", type=int, default=10, help="DQN evaluation every N iterations (win rate vs random/heuristic)")
+    parser.add_argument("--eval_games", type=int, default=50, help="Games per DQN eval vs random and vs heuristic")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -289,6 +315,16 @@ def main() -> None:
         print(f"Using device: {device} (CUDA not available)")
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
+    if args.agent_type == "alphazero":
+        _run_alphazero_training(args, device)
+    elif args.agent_type == "dqn":
+        _run_dqn_training(args, device)
+    else:
+        raise ValueError(f"Unknown agent_type: {args.agent_type}")
+
+
+def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> None:
+    """AlphaZero self-play and training loop."""
     model = AlphaZeroTransform(board_size=args.board_size).to(device)
     iteration_offset = 0
     if args.resume and os.path.isfile(args.resume):
@@ -448,16 +484,138 @@ def main() -> None:
                 save_model_weights(bot.model, args.save_best_path)
                 print(f"  -> saved best to {args.save_best_path}")
 
-        # Save checkpoint every iteration (for league pool) and every 5 for convenience
-        ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
-        save_model_weights(bot.model, ckpt_path)
-        checkpoint_pool.append(ckpt_path)
-        checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
+        # Save checkpoint every 5 iterations (and on last); used for league pool
         if iteration % 5 == 0 or iteration == total_display:
+            ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
+            save_model_weights(bot.model, ckpt_path)
+            checkpoint_pool.append(ckpt_path)
+            checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
             print(f"  -> checkpoint {ckpt_path}")
 
     print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))
-    print("Training complete.")
+    print("AlphaZero training complete.")
+
+
+def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
+    """DQN self-play and training loop."""
+    model = DQN(board_size=args.board_size).to(device)
+    target_model = DQN(board_size=args.board_size).to(device)
+    target_model.load_state_dict(model.state_dict())
+
+    dqn_save_best = os.path.join(args.checkpoint_dir, "dqn_best.pt")
+
+    iteration_offset = 0
+    global_step = 0
+    if args.resume and os.path.isfile(args.resume):
+        load_weights(model, args.resume, device)
+        target_model.load_state_dict(model.state_dict())
+        print(f"Resumed from {args.resume}")
+        base = os.path.basename(args.resume)
+        if base.startswith("dqn_checkpoint_") and base.endswith(".pt"):
+            try:
+                iteration_offset = int(base[len("dqn_checkpoint_") : -len(".pt")])
+            except ValueError:
+                pass
+
+    replay_buffer = ReplayBuffer(args.replay_buffer_size)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    best_loss = float("inf")
+    total_iterations = args.iterations
+    total_display = iteration_offset + total_iterations
+    total_train_steps = 0
+
+    def log_self_play(current: int, total: int) -> None:
+        msg = progress_bar(current, total, width=25, prefix="  Self-play ", suffix=" games")
+        sys.stdout.write(f"\r{msg}")
+        sys.stdout.flush()
+
+    for i in range(total_iterations):
+        iteration = iteration_offset + i + 1
+        iter_msg = progress_bar(iteration, total_display, width=30, prefix="Iteration ", suffix="")
+        print(iter_msg)
+
+        epsilon = get_epsilon(
+            global_step,
+            args.epsilon_start,
+            args.epsilon_end,
+            args.epsilon_decay_steps,
+        )
+
+        steps, wins, losses, draws = dqn_self_play(
+            model,
+            replay_buffer,
+            args.board_size,
+            args.games_per_iteration,
+            device,
+            epsilon,
+            heuristic_prob=args.heuristic_prob,
+            progress_callback=log_self_play,
+            use_amp=args.amp,
+        )
+        global_step += steps
+        total_games = wins + losses + draws
+        game_success_rate = wins / total_games if total_games else 0.0
+
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        sys.stdout.flush()
+
+        if len(replay_buffer) < args.batch_size:
+            print(
+                f"  Buffer size {len(replay_buffer)} < batch_size; skipping train  game_success_rate={game_success_rate:.2f}"
+            )
+        else:
+            total_loss = 0.0
+            n_train = 0
+            for _ in range(args.train_steps_per_iteration):
+                batch = replay_buffer.sample(
+                    args.batch_size,
+                    terminal_fraction=args.dqn_terminal_fraction,
+                )
+                loss = dqn_train_step(
+                    batch,
+                    model,
+                    target_model,
+                    optimizer,
+                    args.board_size,
+                    device,
+                    gamma=args.gamma,
+                    use_amp=args.amp,
+                )
+                total_loss += loss
+                n_train += 1
+                total_train_steps += 1
+                if total_train_steps % args.target_update_freq == 0:
+                    target_model.load_state_dict(model.state_dict())
+
+            if n_train > 0:
+                avg_loss = total_loss / n_train
+                print(
+                    f"  Loss: {avg_loss:.4f} buffer={len(replay_buffer)} epsilon={epsilon:.3f} game_success_rate={game_success_rate:.2f}"
+                )
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    save_model_weights(model, dqn_save_best)
+                    print(f"  -> saved best to {dqn_save_best}")
+
+        if iteration % args.eval_freq == 0 or iteration == total_display:
+            eval_random = evaluate_dqn(
+                model, args.board_size, device, args.eval_games, "random", use_amp=args.amp
+            )
+            eval_heuristic = evaluate_dqn(
+                model, args.board_size, device, args.eval_games, "heuristic", use_amp=args.amp
+            )
+            print(
+                f"  Eval: vs_random win_rate={eval_random['win_rate']:.2f}  vs_heuristic win_rate={eval_heuristic['win_rate']:.2f}"
+            )
+
+        # Save checkpoint every 10 iterations (and on last)
+        if iteration % 10 == 0 or iteration == total_display:
+            ckpt_path = os.path.join(args.checkpoint_dir, f"dqn_checkpoint_{iteration}.pt")
+            save_model_weights(model, ckpt_path)
+            print(f"  -> checkpoint {ckpt_path}")
+
+    print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))
+    print("DQN training complete.")
 
 
 if __name__ == "__main__":

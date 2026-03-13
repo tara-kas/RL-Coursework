@@ -11,7 +11,7 @@ def main():
         "--weights",
         type=str,
         default=None,
-        help="Path to AlphaZero checkpoint (e.g. weights/best.pt or weights/checkpoint_50.pt). Default: weights/best.pt",
+        help="Path to checkpoint. Use weights/best.pt for AlphaZero or weights/dqn_best.pt for DQN. Auto-detects model from path.",
     )
     args = parser.parse_args()
 
