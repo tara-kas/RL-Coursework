@@ -266,32 +266,54 @@ def dqn_self_play(
     device: torch.device,
     epsilon: float,
     heuristic_prob: float = 0.0,
+    league_model: nn.Module | None = None,
+    league_prob: float = 0.0,
     progress_callback: Callable[[int, int], None] | None = None,
     use_amp: bool = False,
-) -> int:
+) -> tuple[int, int, int, int]:
     """
     Play num_games and push (s, a, r, s', done) transitions to replay_buffer.
-    With heuristic_prob, opponent is heuristic bot; else self (copy of policy).
-    Returns (total_steps, wins, losses, draws) for player 0 (the DQN agent).
+    Opponent per game: with probability league_prob use league_model, with heuristic_prob use
+    heuristic bot, else self-play (current model). Probabilities are league_prob, heuristic_prob,
+    and 1 - league_prob - heuristic_prob.
+    Returns (total_steps, wins, losses, draws, games_league, games_heuristic, games_self_play) for player 0.
     """
     model.eval()
+    if league_model is not None:
+        league_model.eval()
     total_steps = 0
     wins = 0
     losses = 0
     draws = 0
+    games_league = 0
+    games_heuristic = 0
+    games_self_play = 0
 
     for g in range(num_games):
         if progress_callback is not None:
             progress_callback(g + 1, num_games)
 
-        use_heuristic_opponent = random.random() < heuristic_prob
+        r = random.random()
+        use_league_opponent = league_model is not None and r < league_prob
+        use_heuristic_opponent = not use_league_opponent and r < league_prob + heuristic_prob
+        if use_league_opponent:
+            games_league += 1
+        elif use_heuristic_opponent:
+            games_heuristic += 1
+        else:
+            games_self_play += 1
         board = np.full((board_size, board_size), -1, dtype=np.int32)
         current_player = 0
 
         while True:
             state = preprocess_board(board.copy(), current_player)
 
-            if use_heuristic_opponent and current_player == 1:
+            if current_player == 1 and use_league_opponent:
+                _, move = select_action(
+                    league_model, board, current_player, board_size, device, epsilon=0.0, use_amp=use_amp
+                )
+                action_idx = move_to_idx(move[0], move[1], board_size)
+            elif current_player == 1 and use_heuristic_opponent:
                 move = heuristic_predict(board.copy(), current_player)
                 action_idx = move_to_idx(move[0], move[1], board_size)
             else:
@@ -327,7 +349,7 @@ def dqn_self_play(
             total_steps += 1
             current_player = 1 - current_player
 
-    return total_steps, wins, losses, draws
+    return total_steps, wins, losses, draws, games_league, games_heuristic, games_self_play
 
 
 def evaluate_dqn(

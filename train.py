@@ -529,6 +529,7 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
     total_iterations = args.iterations
     total_display = iteration_offset + total_iterations
     total_train_steps = 0
+    checkpoint_pool: list[str] = []
 
     def log_self_play(current: int, total: int) -> None:
         msg = progress_bar(current, total, width=25, prefix="  Self-play ", suffix=" games")
@@ -547,7 +548,15 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
             args.epsilon_decay_steps,
         )
 
-        steps, wins, losses, draws = dqn_self_play(
+        league_model = None
+        if checkpoint_pool and args.league_prob > 0:
+            league_path = random.choice(checkpoint_pool)
+            if os.path.isfile(league_path):
+                league_model = DQN(board_size=args.board_size).to(device)
+                load_weights(league_model, league_path, device)
+                league_model.eval()
+
+        steps, wins, losses, draws, games_league, games_heuristic, games_self_play = dqn_self_play(
             model,
             replay_buffer,
             args.board_size,
@@ -555,19 +564,22 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
             device,
             epsilon,
             heuristic_prob=args.heuristic_prob,
+            league_model=league_model,
+            league_prob=args.league_prob,
             progress_callback=log_self_play,
             use_amp=args.amp,
         )
         global_step += steps
         total_games = wins + losses + draws
         game_success_rate = wins / total_games if total_games else 0.0
+        game_type_log = f"league={games_league} heuristic={games_heuristic} self_play={games_self_play}"
 
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
 
         if len(replay_buffer) < args.batch_size:
             print(
-                f"  Buffer size {len(replay_buffer)} < batch_size; skipping train  game_success_rate={game_success_rate:.2f}"
+                f"  Buffer size {len(replay_buffer)} < batch_size; skipping train  game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
             )
         else:
             total_loss = 0.0
@@ -596,7 +608,7 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
             if n_train > 0:
                 avg_loss = total_loss / n_train
                 print(
-                    f"  Loss: {avg_loss:.4f} buffer={len(replay_buffer)} epsilon={epsilon:.3f} game_success_rate={game_success_rate:.2f}"
+                    f"  Loss: {avg_loss:.4f} buffer={len(replay_buffer)} epsilon={epsilon:.3f} game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
                 )
                 if avg_loss < best_loss:
                     best_loss = avg_loss
@@ -618,6 +630,8 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
         if iteration % 10 == 0 or iteration == total_display:
             ckpt_path = os.path.join(args.checkpoint_dir, f"dqn_checkpoint_{iteration}.pt")
             save_model_weights(model, ckpt_path)
+            checkpoint_pool.append(ckpt_path)
+            checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
             print(f"  -> checkpoint {ckpt_path}")
 
     print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))
