@@ -70,6 +70,23 @@ Training from scratch uses temperature and opponent diversity (heuristic + leagu
 - **Training output**: `weights/checkpoint_*.pt` and `weights/best.pt`.
 - **Game UI**: uses `DEFAULT_WEIGHTS_PATH` when using the AlphaZero bot.
 
+## Evaluation
+
+Run standalone evaluation of a model (DQN or AlphaZero) vs random, heuristic, or AlphaZero:
+
+```bash
+# DQN vs random (1000 games)
+uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --opponent random --num_games 1000 --board_size 9
+
+# DQN vs heuristic
+uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --opponent heuristic --num_games 1000 --board_size 9
+
+# DQN vs AlphaZero (requires opponent weights)
+uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --opponent alphazero --opponent_weights best_weights/alphazero_best.pt --num_games 1000 --board_size 9 --amp
+```
+
+Options: `--model` (path), `--agent_type` (dqn | alphazero), `--opponent` (random | heuristic | alphazero), `--num_games`, `--board_size`, `--opponent_weights` (required when opponent is alphazero), `--amp`, `--num_simulations` (for AlphaZero MCTS), `--seed`.
+
 ## Standardized API (cross-group testing)
 
 Create one bot and call `bot.predict()` for each board state (no reinitialisation):
@@ -89,6 +106,7 @@ One-off use: `predict(board_state, current_player=None, weights_path=..., **kwar
 
 - `main.py` – Pygame game loop; launches the playable scene.
 - `train.py` – Self-play and training script (no UI).
+- `evaluation.py` – Standalone evaluation: model vs random/heuristic/AlphaZero over N games.
 - `src/game_logic.py` – Gomoku game logic and bot loading.
 - `src/gomoku_game.py` – Board helpers and win/draw detection.
 - `src/gomoku_utils.py` – Board-to-3-plane encoding for the network.
