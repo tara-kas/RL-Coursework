@@ -129,8 +129,13 @@ uv run python train.py --board_size 9 --agent_type dqn --amp --num_workers 8 --i
 After 100% random success
 uv run python train.py --board_size 9 --agent_type dqn --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --league_prob 0.2 --heuristic_prob 0.6 --resume weights/dqn_checkpoint_1030.pt
 
+uv run python train.py --board_size 9 --agent_type dqn --best_by heuristic --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --eval_games 200 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --league_prob 0.2 --heuristic_prob 0.7 --heuristic_win_bonus 0.2 --heuristic_prob_start 1 --heuristic_prob_decay_iters 500 --resume weights/dqn_checkpoint_290.pt
+
 ### DQN training tips
 
 - **Longer runs**: Use 500+ iterations and a large replay buffer (e.g. `--replay_buffer_size 200000`) so value can propagate from terminal (+1/-1) back through many steps.
 - **Metrics beyond loss**: Watch the eval line (`Eval: vs_random win_rate=... vs_heuristic win_rate=...`). Low loss with low win rate means the network is fitting targets that do not yet encode a good policy; loss alone can be misleading with sparse rewards.
 - **Terminal oversampling**: Default `--dqn_terminal_fraction 0.5` increases the fraction of batches drawn from game-ending transitions so the TD target carries real value.
+- **Best by heuristic**: Use `--best_by heuristic` (default) so the saved best model is the one with highest win rate vs the heuristic bot, not lowest loss. Use `--eval_games_best 100` (or 200) for a more stable choice.
+- **Beating the heuristic**: If vs_heuristic win rate stays low, try `--heuristic_win_bonus 0.2` to give extra reward for wins vs heuristic, or a curriculum: `--heuristic_prob_start 0.8 --heuristic_prob_decay_iters 500` to start with more heuristic games then decay to `--heuristic_prob`.
+- **Loss stuck near 0**: If loss is ~0 but win rate is poor, try a slightly higher `--learning_rate` (e.g. 3e-4 or 5e-4) or longer `--epsilon_decay_steps` so the policy keeps exploring.

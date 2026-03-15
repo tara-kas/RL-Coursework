@@ -272,7 +272,7 @@ def main() -> None:
     parser.add_argument("--num_simulations", type=int, default=50)
     parser.add_argument("--games_per_iteration", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate; DQN may benefit from higher (e.g. 3e-4) if loss is stuck near 0")
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--train_epochs", type=int, default=3)
     parser.add_argument("--checkpoint_dir", type=str, default="weights")
@@ -303,6 +303,11 @@ def main() -> None:
     parser.add_argument("--dqn_terminal_fraction", type=float, default=0.5, help="DQN fraction of batch from terminal transitions (stronger reward signal)")
     parser.add_argument("--eval_freq", type=int, default=10, help="DQN evaluation every N iterations (win rate vs random/heuristic)")
     parser.add_argument("--eval_games", type=int, default=50, help="Games per DQN eval vs random and vs heuristic")
+    parser.add_argument("--eval_games_best", type=int, default=100, help="Games for heuristic eval when saving best by heuristic (lower variance)")
+    parser.add_argument("--best_by", type=str, default="heuristic", choices=("loss", "heuristic"), help="DQN: save best by loss or by heuristic win rate")
+    parser.add_argument("--heuristic_win_bonus", type=float, default=0.0, help="DQN: extra reward for winning vs heuristic (e.g. 0.1-0.3); 0 = off")
+    parser.add_argument("--heuristic_prob_start", type=float, default=None, help="DQN: start heuristic_prob at this value and decay to heuristic_prob (curriculum)")
+    parser.add_argument("--heuristic_prob_decay_iters", type=int, default=None, help="DQN: iterations over which to decay heuristic_prob_start to heuristic_prob")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -526,6 +531,7 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
     replay_buffer = ReplayBuffer(args.replay_buffer_size)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     best_loss = float("inf")
+    best_heuristic_wr = -1.0
     total_iterations = args.iterations
     total_display = iteration_offset + total_iterations
     total_train_steps = 0
@@ -556,6 +562,12 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
                 load_weights(league_model, league_path, device)
                 league_model.eval()
 
+        if args.heuristic_prob_start is not None and args.heuristic_prob_decay_iters is not None:
+            t = min(1.0, (i + 1) / args.heuristic_prob_decay_iters)
+            heuristic_prob_effective = args.heuristic_prob_start + t * (args.heuristic_prob - args.heuristic_prob_start)
+        else:
+            heuristic_prob_effective = args.heuristic_prob
+
         steps, wins, losses, draws, games_league, games_heuristic, games_self_play = dqn_self_play(
             model,
             replay_buffer,
@@ -563,9 +575,10 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
             args.games_per_iteration,
             device,
             epsilon,
-            heuristic_prob=args.heuristic_prob,
+            heuristic_prob=heuristic_prob_effective,
             league_model=league_model,
             league_prob=args.league_prob,
+            heuristic_win_bonus=args.heuristic_win_bonus,
             progress_callback=log_self_play,
             use_amp=args.amp,
         )
@@ -610,21 +623,26 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
                 print(
                     f"  Loss: {avg_loss:.4f} buffer={len(replay_buffer)} epsilon={epsilon:.3f} game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
                 )
-                if avg_loss < best_loss:
+                if args.best_by == "loss" and avg_loss < best_loss:
                     best_loss = avg_loss
                     save_model_weights(model, dqn_save_best)
-                    print(f"  -> saved best to {dqn_save_best}")
+                    print(f"  -> saved best (by loss) to {dqn_save_best}")
 
         if iteration % args.eval_freq == 0 or iteration == total_display:
             eval_random = evaluate_dqn(
                 model, args.board_size, device, args.eval_games, "random", use_amp=args.amp
             )
+            n_heuristic = args.eval_games_best if args.best_by == "heuristic" else args.eval_games
             eval_heuristic = evaluate_dqn(
-                model, args.board_size, device, args.eval_games, "heuristic", use_amp=args.amp
+                model, args.board_size, device, n_heuristic, "heuristic", use_amp=args.amp
             )
             print(
                 f"  Eval: vs_random win_rate={eval_random['win_rate']:.2f}  vs_heuristic win_rate={eval_heuristic['win_rate']:.2f}"
             )
+            if args.best_by == "heuristic" and eval_heuristic["win_rate"] > best_heuristic_wr:
+                best_heuristic_wr = eval_heuristic["win_rate"]
+                save_model_weights(model, dqn_save_best)
+                print(f"  -> saved best (by heuristic) to {dqn_save_best}")
 
         # Save checkpoint every 10 iterations (and on last)
         if iteration % 10 == 0 or iteration == total_display:

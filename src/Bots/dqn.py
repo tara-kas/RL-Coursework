@@ -268,14 +268,16 @@ def dqn_self_play(
     heuristic_prob: float = 0.0,
     league_model: nn.Module | None = None,
     league_prob: float = 0.0,
+    heuristic_win_bonus: float = 0.0,
     progress_callback: Callable[[int, int], None] | None = None,
     use_amp: bool = False,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int, int, int]:
     """
     Play num_games and push (s, a, r, s', done) transitions to replay_buffer.
     Opponent per game: with probability league_prob use league_model, with heuristic_prob use
     heuristic bot, else self-play (current model). Probabilities are league_prob, heuristic_prob,
     and 1 - league_prob - heuristic_prob.
+    If heuristic_win_bonus > 0, terminal reward for player 0 winning vs heuristic is 1 + heuristic_win_bonus.
     Returns (total_steps, wins, losses, draws, games_league, games_heuristic, games_self_play) for player 0.
     """
     model.eval()
@@ -336,6 +338,8 @@ def dqn_self_play(
                 else:
                     draws += 1
                 reward = 1.0 if winner == current_player else (-1.0 if winner != -1 else 0.0)
+                if use_heuristic_opponent and winner == 0:
+                    reward = 1.0 + heuristic_win_bonus
                 next_state = preprocess_board(board.copy(), current_player)
                 done = True
                 replay_buffer.push(state, action_idx, reward, next_state, done)
