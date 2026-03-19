@@ -123,6 +123,9 @@ class Bot(BaseBot):
         current_player: int,
         c_puct: float = 1.5,
         temperature: float = 0.0,
+        add_root_noise: bool = False,
+        dirichlet_alpha: float = 0.3,
+        dirichlet_epsilon: float = 0.25,
     ) -> tuple[tuple[int, int], np.ndarray]:
         """
         Run MCTS and return (move, policy) for self-play training. Uses this bot's model.
@@ -139,6 +142,9 @@ class Bot(BaseBot):
             device=self.device,
             temperature=temperature,
             use_amp=self.use_amp,
+            add_root_noise=add_root_noise,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_epsilon=dirichlet_epsilon,
         )
 
     def move(self, game_state: GameState) -> tuple[int, int] | None:

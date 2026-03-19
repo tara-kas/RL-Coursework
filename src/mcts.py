@@ -1,16 +1,32 @@
 import numpy as np
 import torch
 
-from src.gomoku_game import apply_move, get_legal_moves, is_board_full
+from src.gomoku_game import (
+    GAME_NOT_OVER,
+    WIN,
+    apply_move,
+    get_game_result,
+    get_legal_moves,
+    is_board_full,
+)
 from src.gomoku_utils import preprocess_board
 import torch.nn as nn
 
 
 class MCTSNode():
-    def __init__(self, board: np.ndarray, current_player: int, parent: "MCTSNode | None" = None):
+    def __init__(
+        self,
+        board: np.ndarray,
+        current_player: int,
+        parent: "MCTSNode | None" = None,
+        last_move: tuple[int, int] | None = None,
+        last_player: int | None = None,
+    ):
         self.board = board
         self.current_player = current_player
         self.parent = parent
+        self.last_move = last_move
+        self.last_player = last_player
         self.children: dict[tuple[int, int], MCTSNode] = {}
         self.N: int = 0
         self.W: float = 0.0  # Total value from this node's player perspective
@@ -24,21 +40,46 @@ class MCTSNode():
         return len(self.children) > 0
 
 
+def _terminal_value(node: MCTSNode) -> float | None:
+    """
+    Return terminal value from node.current_player perspective if terminal:
+      - +1 side-to-move won
+      - -1 side-to-move lost
+      -  0 draw
+    Return None if non-terminal.
+    """
+    if node.last_move is not None and node.last_player is not None:
+        result = get_game_result(node.board, node.last_move, node.last_player)
+        if result != GAME_NOT_OVER:
+            if result == WIN:
+                # last_player made the last move; side-to-move is the opponent
+                return -1.0
+            return 0.0
+
+    if is_board_full(node.board):
+        return 0.0
+    legal = get_legal_moves(node.board)
+    if not legal:
+        return 0.0
+    return None
+
+
 def _select_leaf(
     root: MCTSNode,
     c_puct: float,
-) -> tuple[MCTSNode, list[tuple[MCTSNode, tuple[int, int] | None]], bool]:
+) -> tuple[MCTSNode, list[tuple[MCTSNode, tuple[int, int] | None]], float | None]:
     """
-    Run selection from root until an unexpanded node or terminal. Returns (node, path, is_terminal).
-    If is_terminal, node is a terminal state (board full or no legal moves); backup with 0, no NN.
+    Run selection from root until an unexpanded node or terminal.
+    Returns (node, path, terminal_value). If terminal_value is not None, skip NN and backup directly.
     """
     node = root
     path: list[tuple[MCTSNode, tuple[int, int] | None]] = [(root, None)]
 
-    while node.is_expanded() and not is_board_full(node.board):
+    while node.is_expanded():
+        tv = _terminal_value(node)
+        if tv is not None:
+            return node, path, tv
         legal = get_legal_moves(node.board)
-        if not legal:
-            return node, path, True
         total_N = sum(node.children[m].N for m in legal)
         best_score = -float("inf")
         best_move = None
@@ -51,16 +92,14 @@ def _select_leaf(
                 best_score = score
                 best_move = move
         if best_move is None:
-            return node, path, True
+            return node, path, 0.0
         node = node.children[best_move]
         path.append((node, best_move))
 
-    if is_board_full(node.board):
-        return node, path, True
-    legal = get_legal_moves(node.board)
-    if not legal:
-        return node, path, True
-    return node, path, False
+    tv = _terminal_value(node)
+    if tv is not None:
+        return node, path, tv
+    return node, path, None
 
 
 def _backup_path(
@@ -85,6 +124,9 @@ def _run_mcts_simulations(
     device: torch.device,
     batch_size: int = 32,
     use_amp: bool = False,
+    add_root_noise: bool = False,
+    dirichlet_alpha: float = 0.3,
+    dirichlet_epsilon: float = 0.25,
 ) -> None:
     """Run num_simulations MCTS iterations from root in batches. Mutates root and its tree."""
     planes_batch = torch.empty(
@@ -97,17 +139,17 @@ def _run_mcts_simulations(
     while n_done < num_simulations:
         current_batch_size = min(batch_size, num_simulations - n_done)
         leaves: list[tuple[MCTSNode, list[tuple[MCTSNode, tuple[int, int] | None]]]] = []
-        terminals: list[list[tuple[MCTSNode, tuple[int, int] | None]]] = []
+        terminals: list[tuple[list[tuple[MCTSNode, tuple[int, int] | None]], float]] = []
 
         for _ in range(current_batch_size):
-            node, path, is_terminal = _select_leaf(root, c_puct)
-            if is_terminal:
-                terminals.append(path)
+            node, path, terminal_value = _select_leaf(root, c_puct)
+            if terminal_value is not None:
+                terminals.append((path, terminal_value))
             else:
                 leaves.append((node, path))
 
-        for path in terminals:
-            _backup_path(path, 0.0)
+        for path, value in terminals:
+            _backup_path(path, value)
         n_done += current_batch_size
 
         if not leaves:
@@ -149,9 +191,29 @@ def _run_mcts_simulations(
                 for move in legal:
                     i, j = move
                     node.P[move] = float(policy[i * board_size + j])
+                if add_root_noise and node.parent is None and legal:
+                    priors = np.array([node.P[m] for m in legal], dtype=np.float64)
+                    priors_sum = float(priors.sum())
+                    if priors_sum <= 0:
+                        priors = np.full(len(legal), 1.0 / len(legal), dtype=np.float64)
+                    else:
+                        priors /= priors_sum
+                    noise = np.random.dirichlet(
+                        np.full(len(legal), dirichlet_alpha, dtype=np.float64)
+                    )
+                    mixed = (1.0 - dirichlet_epsilon) * priors + dirichlet_epsilon * noise
+                    for k, move in enumerate(legal):
+                        node.P[move] = float(mixed[k])
+                for move in legal:
                     child_board = apply_move(node.board, move, node.current_player)
                     opponent = 1 - node.current_player
-                    node.children[move] = MCTSNode(child_board, opponent, parent=node)
+                    node.children[move] = MCTSNode(
+                        child_board,
+                        opponent,
+                        parent=node,
+                        last_move=move,
+                        last_player=node.current_player,
+                    )
             _backup_path(path, value)
 
 
@@ -199,6 +261,9 @@ def run_mcts_with_policy(
     device: torch.device | None = None,
     temperature: float = 0.0,
     use_amp: bool = False,
+    add_root_noise: bool = False,
+    dirichlet_alpha: float = 0.3,
+    dirichlet_epsilon: float = 0.25,
 ) -> tuple[tuple[int, int], np.ndarray]:
     """
     Run MCTS and return the best move and the root visit distribution (policy target).
@@ -221,7 +286,20 @@ def run_mcts_with_policy(
         policy[i * board_size + j] = 1.0
         return legal_moves[0], policy
 
-    _run_mcts_simulations(root, legal_moves, model, board_size, num_simulations, c_puct, device, batch_size, use_amp)
+    _run_mcts_simulations(
+        root,
+        legal_moves,
+        model,
+        board_size,
+        num_simulations,
+        c_puct,
+        device,
+        batch_size,
+        use_amp,
+        add_root_noise=add_root_noise,
+        dirichlet_alpha=dirichlet_alpha,
+        dirichlet_epsilon=dirichlet_epsilon,
+    )
 
     total_visits = sum(root.children[m].N for m in legal_moves if m in root.children)
     if total_visits == 0:

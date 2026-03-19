@@ -19,6 +19,7 @@ from src.gomoku_game import (
     DRAW,
     apply_move,
     get_game_result,
+    get_legal_moves,
 )
 from src.gomoku_utils import preprocess_board
 from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot
@@ -66,14 +67,27 @@ def self_play(
     league_bot: Bot | None = None,
     league_prob: float = 0.0,
     heuristic_prob: float = 0.0,
-) -> list[tuple[np.ndarray, int, np.ndarray, float]]:
+    add_root_noise: bool = True,
+    root_dirichlet_alpha: float = 0.3,
+    root_dirichlet_epsilon: float = 0.25,
+) -> tuple[list[tuple[np.ndarray, int, np.ndarray, float]], dict[str, int]]:
     """
     Run num_games. Each game is self-play, league (vs league_bot), or heuristic (vs tactical bot)
     with probabilities (1 - league_prob - heuristic_prob), league_prob, heuristic_prob.
-    Returns list of (board, current_player, policy, z).
+    Returns:
+      - list of (board, current_player, policy, z)
+      - stats dict with wins/losses/draws and game type counts for player 0
     """
     bot.model.eval()
     buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
+    stats = {
+        "wins": 0,
+        "losses": 0,
+        "draws": 0,
+        "games_league": 0,
+        "games_heuristic": 0,
+        "games_self_play": 0,
+    }
 
     for g in range(num_games):
         if progress_callback is not None:
@@ -81,10 +95,13 @@ def self_play(
         r = random.random()
         if league_bot is not None and r < league_prob:
             opponent = league_bot
+            stats["games_league"] += 1
         elif r < league_prob + heuristic_prob:
             opponent = heuristic_predict
+            stats["games_heuristic"] += 1
         else:
             opponent = None
+            stats["games_self_play"] += 1
 
         board = np.full((board_size, board_size), -1, dtype=np.int32)
         current_player = 0
@@ -98,6 +115,9 @@ def self_play(
                     current_player,
                     c_puct=c_puct,
                     temperature=temp,
+                    add_root_noise=add_root_noise,
+                    dirichlet_alpha=root_dirichlet_alpha,
+                    dirichlet_epsilon=root_dirichlet_epsilon,
                 )
                 if opponent is None:
                     game_history.append((board.copy(), current_player, policy))
@@ -117,6 +137,12 @@ def self_play(
                     winner = current_player
                 else:
                     winner = -1
+                if winner == 0:
+                    stats["wins"] += 1
+                elif winner == 1:
+                    stats["losses"] += 1
+                else:
+                    stats["draws"] += 1
                 if opponent is not None:
                     z = 1.0 if winner == 0 else (-1.0 if winner == 1 else 0.0)
                     for b, _p, pi in game_history:
@@ -128,7 +154,7 @@ def self_play(
                 break
             current_player = 1 - current_player
 
-    return buffer
+    return buffer, stats
 
 
 def _worker_self_play(
@@ -148,7 +174,10 @@ def _worker_self_play(
     seed_base: int | None,
     use_amp: bool,
     compile_model: bool,
-) -> list[tuple[np.ndarray, int, np.ndarray, float]]:
+    add_root_noise: bool,
+    root_dirichlet_alpha: float,
+    root_dirichlet_epsilon: float,
+) -> tuple[list[tuple[np.ndarray, int, np.ndarray, float]], dict[str, int]]:
     """
     Worker for parallel self-play. Loads model from state_dict, runs num_games, returns buffer.
     Must be top-level for pickling in multiprocessing.
@@ -199,6 +228,9 @@ def _worker_self_play(
         league_bot=league_bot,
         league_prob=league_prob,
         heuristic_prob=heuristic_prob,
+        add_root_noise=add_root_noise,
+        root_dirichlet_alpha=root_dirichlet_alpha,
+        root_dirichlet_epsilon=root_dirichlet_epsilon,
     )
 
 
@@ -253,6 +285,65 @@ def train_step(
     return policy_loss.item(), value_loss.item()
 
 
+def evaluate_alphazero(
+    bot: Bot,
+    board_size: int,
+    num_games: int,
+    opponent: str,
+) -> dict[str, float]:
+    """
+    Evaluate AlphaZero bot as player 0 vs random or heuristic opponent.
+    Returns wins/losses/draws/win_rate/avg_return.
+    """
+    wins = 0
+    losses = 0
+    draws = 0
+
+    for _ in range(num_games):
+        board = np.full((board_size, board_size), -1, dtype=np.int32)
+        current_player = 0
+        while True:
+            if current_player == 0:
+                move = bot.predict(board.copy(), current_player=current_player)
+            else:
+                legal = get_legal_moves(board)
+                if not legal:
+                    break
+                if opponent == "random":
+                    move = random.choice(legal)
+                elif opponent == "heuristic":
+                    move = heuristic_predict(board.copy(), current_player)
+                else:
+                    raise ValueError(f"Unsupported AlphaZero eval opponent: {opponent}")
+
+            board = apply_move(board, move, current_player)
+            result = get_game_result(board, move, current_player)
+            if result != GAME_NOT_OVER:
+                if result == WIN:
+                    winner = current_player
+                else:
+                    winner = -1
+                if winner == 0:
+                    wins += 1
+                elif winner == 1:
+                    losses += 1
+                else:
+                    draws += 1
+                break
+            current_player = 1 - current_player
+
+    total = wins + losses + draws
+    win_rate = wins / total if total else 0.0
+    avg_return = (wins - losses) / total if total else 0.0
+    return {
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "win_rate": win_rate,
+        "avg_return": avg_return,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gomoku self-play training (AlphaZero or DQN)")
     parser.add_argument(
@@ -292,6 +383,12 @@ def main() -> None:
     parser.add_argument("--amp", action="store_true", help="Use FP16 autocast in MCTS")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel self-play workers (1 = no parallelism)")
     parser.add_argument("--worker_device", type=str, default="cpu", help="Device for parallel workers (main process keeps GPU for training)")
+    parser.add_argument("--no_root_noise", action="store_true", help="Disable Dirichlet root noise during AlphaZero self-play")
+    parser.add_argument("--root_dirichlet_alpha", type=float, default=0.3, help="AlphaZero root Dirichlet concentration for self-play")
+    parser.add_argument("--root_dirichlet_epsilon", type=float, default=0.25, help="AlphaZero root prior mixing weight for Dirichlet noise")
+    parser.add_argument("--az_eval_freq", type=int, default=10, help="AlphaZero evaluation every N iterations (win rate vs random/heuristic)")
+    parser.add_argument("--az_best_by", type=str, default="heuristic", choices=("loss", "heuristic"), help="AlphaZero: save best by loss or by heuristic win rate")
+    parser.add_argument("--az_eval_games_best", type=int, default=100, help="AlphaZero eval games vs heuristic when saving best by heuristic")
     # DQN-specific (ignored when agent_type == alphazero)
     parser.add_argument("--gamma", type=float, default=0.99, help="DQN discount factor")
     parser.add_argument("--epsilon_start", type=float, default=1.0, help="DQN initial exploration")
@@ -363,6 +460,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
     buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
     buffer_max_size = args.games_per_iteration * 200  # rough upper bound positions per game
     best_loss = float("inf")
+    best_heuristic_wr = -1.0
     total_iterations = args.iterations
     checkpoint_pool: list[str] = []
 
@@ -409,7 +507,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
 
         # Self-play: parallel workers or single process
         if args.num_workers <= 1:
-            new_data = self_play(
+            new_data, self_play_stats = self_play(
                 bot,
                 args.board_size,
                 args.games_per_iteration,
@@ -420,6 +518,9 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                 league_bot=league_bot,
                 league_prob=args.league_prob,
                 heuristic_prob=args.heuristic_prob,
+                add_root_noise=not args.no_root_noise,
+                root_dirichlet_alpha=args.root_dirichlet_alpha,
+                root_dirichlet_epsilon=args.root_dirichlet_epsilon,
             )
         else:
             chunk_size = math.ceil(args.games_per_iteration / args.num_workers)
@@ -449,16 +550,36 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                         args.seed,
                         args.amp,
                         not args.no_compile,
+                        not args.no_root_noise,
+                        args.root_dirichlet_alpha,
+                        args.root_dirichlet_epsilon,
                     )
                 )
             with multiprocessing.Pool(args.num_workers) as pool:
                 results = pool.starmap(_worker_self_play, worker_args)
-            new_data = [item for sublist in results for item in sublist]
+            new_data = [item for data, _stats in results for item in data]
+            self_play_stats = {
+                "wins": sum(s["wins"] for _d, s in results),
+                "losses": sum(s["losses"] for _d, s in results),
+                "draws": sum(s["draws"] for _d, s in results),
+                "games_league": sum(s["games_league"] for _d, s in results),
+                "games_heuristic": sum(s["games_heuristic"] for _d, s in results),
+                "games_self_play": sum(s["games_self_play"] for _d, s in results),
+            }
             print(f"  Self-play  [{'=' * 25}] 100.0% ({args.games_per_iteration}/{args.games_per_iteration}) games")
 
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
         buffer.extend(new_data)
+        total_games = (
+            self_play_stats["wins"] + self_play_stats["losses"] + self_play_stats["draws"]
+        )
+        game_success_rate = self_play_stats["wins"] / total_games if total_games else 0.0
+        game_type_log = (
+            f"league={self_play_stats['games_league']} "
+            f"heuristic={self_play_stats['games_heuristic']} "
+            f"self_play={self_play_stats['games_self_play']}"
+        )
         if len(buffer) > buffer_max_size:
             buffer = buffer[-buffer_max_size:]
 
@@ -488,12 +609,48 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
             avg_vl = total_vl / n_batches
             avg_loss = avg_pl + args.value_coef * avg_vl
             print(
-                f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} buffer={len(buffer)}"
+                f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} buffer={len(buffer)} "
+                f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
             )
-            if avg_loss < best_loss:
+            if args.az_best_by == "loss" and avg_loss < best_loss:
                 best_loss = avg_loss
                 save_model_weights(bot.model, args.save_best_path)
-                print(f"  -> saved best to {args.save_best_path}")
+                print(f"  -> saved best (by loss) to {args.save_best_path}")
+        else:
+            print(
+                f"  Buffer size {len(buffer)} too small; skipping train  "
+                f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
+            )
+
+        if iteration % args.az_eval_freq == 0 or iteration == total_display:
+            eval_random = evaluate_alphazero(
+                bot=bot,
+                board_size=args.board_size,
+                num_games=args.eval_games,
+                opponent="random",
+            )
+            n_heuristic = (
+                args.az_eval_games_best
+                if args.az_best_by == "heuristic"
+                else args.eval_games
+            )
+            eval_heuristic = evaluate_alphazero(
+                bot=bot,
+                board_size=args.board_size,
+                num_games=n_heuristic,
+                opponent="heuristic",
+            )
+            print(
+                f"  Eval: vs_random win_rate={eval_random['win_rate']:.2f}  "
+                f"vs_heuristic win_rate={eval_heuristic['win_rate']:.2f}"
+            )
+            if (
+                args.az_best_by == "heuristic"
+                and eval_heuristic["win_rate"] > best_heuristic_wr
+            ):
+                best_heuristic_wr = eval_heuristic["win_rate"]
+                save_model_weights(bot.model, args.save_best_path)
+                print(f"  -> saved best (by heuristic) to {args.save_best_path}")
 
         # Save checkpoint every 5 iterations (and on last); used for league pool
         if iteration % 5 == 0 or iteration == total_display:

@@ -140,6 +140,8 @@ uv run python train.py --amp --num_workers 4 --iterations 500 --num_simulations 
 alphazero:
 uv run python train.py --amp --num_workers 8 --iterations 500 --num_simulations 200 --games_per_iteration 150 --learning_rate 2e-4 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.25 --heuristic_prob 0.2 --resume weights/checkpoint_163.pt
 
+uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 8 --iterations 500 --games_per_iteration 500 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.7 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25
+
 DQN:
 Initial:
 uv run python train.py --board_size 9 --agent_type dqn --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --league_prob 0.25 --heuristic_prob 0.2
