@@ -1,3 +1,9 @@
+Full guide here: https://tsg.cs.ucl.ac.uk/timeshare-gpus/
+
+
+But if you are having difficulties then follow the instructions below:
+
+
 Need to be in UCL CS Network.
 
 Use external gateway with your normal UCL account by running:
@@ -33,3 +39,6 @@ Once in timeshare machine, make sure your connection only dedicates itself to a 
 ```bash
 source /usr/local/cuda/CUDA_VISIBILITY.csh
 ```
+
+
+hope this helps you guys out :)
