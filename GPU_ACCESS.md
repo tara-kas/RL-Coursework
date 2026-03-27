@@ -50,6 +50,7 @@ Create a temporary cache (will get wiped when you log out):
 mkdir -p /tmp/<cs-user>_uv_cache
 ```
 >(e.g. mkdir -p /tmp/tmoody_uv_cache)
+>(e.g. mkdir -p /tmp/tkasayap_uv_cache)
 
 
 On first setup, initialise startup:
@@ -63,6 +64,7 @@ and paste the following:
 ```bash
 # Ensure the UV cache directory exists on this specific machine
 mkdir -p /tmp/<cs-user>_uv_cache
+
 
 # Set environment variables
 setenv PATH "$HOME/.local/bin:$PATH"
@@ -82,7 +84,20 @@ setenv PATH "$HOME/.local/bin:$PATH"
 setenv UV_CACHE_DIR "/tmp/tmoody_uv_cache"
 
 # Assign exactly one GPU
-source /opt/cuda/scripts/CUDA_VISIBILITY.csh)
+source /opt/cuda/scripts/CUDA_VISIBILITY.csh
+```
+
+example:
+```bash 
+# Ensure the UV cache directory exists on this specific machine
+mkdir -p /tmp/tkasayap_uv_cache
+
+# Set environment variables
+setenv PATH "$HOME/.local/bin:$PATH"
+setenv UV_CACHE_DIR "/tmp/tkasayap_uv_cache"
+
+# Assign exactly one GPU
+source /opt/cuda/scripts/CUDA_VISIBILITY.csh
 ```
 
 Save and Exit
@@ -114,7 +129,7 @@ git clone https://github.com/tara-kas/RL-Coursework
 
 Enter the repository with:
 ```bash
-ls RL-Coursework
+cd RL-Coursework
 ```
 
 Install pip into python by running:
@@ -124,7 +139,7 @@ python -m pip install uv
 
 You can then initialise the project with:
 ```bash
-uv venv .venv
+uv venv .venv --python 3.11
 ```
 
 hope this helps you guys out :)
