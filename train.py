@@ -22,7 +22,8 @@ from src.gomoku_game import (
     get_legal_moves,
 )
 from src.gomoku_utils import preprocess_board
-from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot
+from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot as AlphaZeroBot
+from src.Bots.alpha_zero_hybrid import AlphaZeroHybrid, Bot as HybridBot
 from src.Bots.heuristic_tactical import predict as heuristic_predict
 from src.Bots.dqn import (
     DQN,
@@ -57,14 +58,14 @@ def progress_bar(
 
 
 def self_play(
-    bot: Bot,
+    bot: AlphaZeroBot | HybridBot,
     board_size: int,
     num_games: int,
     c_puct: float = 1.5,
     self_play_temp: float = 1.0,
     temp_moves: int = 30,
     progress_callback: Callable[[int, int], None] | None = None,
-    league_bot: Bot | None = None,
+    league_bot: AlphaZeroBot | HybridBot | None = None,
     league_prob: float = 0.0,
     heuristic_prob: float = 0.0,
     add_root_noise: bool = True,
@@ -192,7 +193,7 @@ def _worker_self_play(
     model.load_state_dict(state_dict, strict=True)
     model.eval()
 
-    bot = Bot(
+    bot = AlphaZeroBot(
         model=model,
         board_size=board_size,
         device=device,
@@ -202,11 +203,11 @@ def _worker_self_play(
         use_amp=use_amp,
     )
 
-    league_bot: Bot | None = None
+    league_bot: AlphaZeroBot | None = None
     if league_path and league_prob > 0 and os.path.isfile(league_path):
         league_model = AlphaZeroTransform(board_size=board_size).to(device)
         load_weights(league_model, league_path, device)
-        league_bot = Bot(
+        league_bot = AlphaZeroBot(
             model=league_model,
             board_size=board_size,
             device=device,
@@ -285,8 +286,87 @@ def train_step(
     return policy_loss.item(), value_loss.item()
 
 
+def _augment_symmetries(
+    states: np.ndarray,
+    policies: np.ndarray,
+    board_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """8-fold augmentation: 4 rotations x (no flip, horizontal flip)."""
+    out_states: list[np.ndarray] = []
+    out_policies: list[np.ndarray] = []
+    for s, p in zip(states, policies, strict=False):
+        p2 = p.reshape(board_size, board_size)
+        for k in range(4):
+            s_rot = np.rot90(s, k=k, axes=(1, 2)).copy()
+            p_rot = np.rot90(p2, k=k).copy()
+            out_states.append(s_rot)
+            out_policies.append(p_rot.reshape(-1))
+
+            s_flip = np.flip(s_rot, axis=2).copy()
+            p_flip = np.flip(p_rot, axis=1).copy()
+            out_states.append(s_flip)
+            out_policies.append(p_flip.reshape(-1))
+    return np.stack(out_states), np.stack(out_policies)
+
+
+def train_step_hybrid(
+    batch: list[tuple[np.ndarray, int, np.ndarray, float]],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    board_size: int,
+    device: torch.device,
+    value_coef: float = 1.0,
+    grad_clip_norm: float = 1.0,
+) -> tuple[float, float]:
+    """One hybrid training step with 8-fold augmentation and grad clipping."""
+    model.train()
+
+    states_list = []
+    policy_targets_list = []
+    value_targets_list = []
+    masks_list = []
+
+    for board, current_player, policy, z in batch:
+        base = preprocess_board(board, current_player)
+        color_plane = np.ones_like(base[0], dtype=np.float32)
+        planes = np.stack([base[0], base[1], color_plane], axis=0)
+        states_list.append(planes)
+        policy_targets_list.append(policy)
+        value_targets_list.append(z)
+        legal_mask = (board == -1).astype(np.float32).flatten()
+        masks_list.append(legal_mask)
+
+    states_np = np.stack(states_list).astype(np.float32)
+    policy_np = np.stack(policy_targets_list).astype(np.float32)
+    value_np = np.array(value_targets_list, dtype=np.float32)
+    masks_np = np.stack(masks_list).astype(np.float32)
+
+    states_np, policy_np = _augment_symmetries(states_np, policy_np, board_size)
+    value_np = np.repeat(value_np, 8)
+    masks_np = np.repeat(masks_np, 8, axis=0)
+
+    states = torch.tensor(states_np, dtype=torch.float32, device=device)
+    policy_targets = torch.tensor(policy_np, dtype=torch.float32, device=device)
+    value_targets = torch.tensor(value_np, dtype=torch.float32, device=device).unsqueeze(1)
+    masks = torch.tensor(masks_np, dtype=torch.float32, device=device)
+
+    policy_pred, value_pred = model(states, masks)
+    policy_loss = -(policy_targets * torch.log(policy_pred + 1e-9)).sum(dim=1).mean()
+    value_loss = torch.nn.functional.mse_loss(value_pred, value_targets)
+
+    loss = policy_loss + value_coef * value_loss
+    optimizer.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
+    optimizer.step()
+    scheduler.step()
+
+    return policy_loss.item(), value_loss.item()
+
+
 def evaluate_alphazero(
-    bot: Bot,
+    bot: AlphaZeroBot | HybridBot,
     board_size: int,
     num_games: int,
     opponent: str,
@@ -345,13 +425,13 @@ def evaluate_alphazero(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gomoku self-play training (AlphaZero or DQN)")
+    parser = argparse.ArgumentParser(description="Gomoku self-play training (AlphaZero, Hybrid, or DQN)")
     parser.add_argument(
         "--agent_type",
         type=str,
         default="alphazero",
-        choices=["alphazero", "dqn"],
-        help="Agent type: alphazero (MCTS + policy/value) or dqn (Q-network + replay buffer)",
+        choices=["alphazero", "hybrid", "dqn"],
+        help="Agent type: alphazero (ResNet), hybrid (CNN+Transformer), or dqn",
     )
     parser.add_argument(
         "--board_size",
@@ -389,6 +469,10 @@ def main() -> None:
     parser.add_argument("--az_eval_freq", type=int, default=10, help="AlphaZero evaluation every N iterations (win rate vs random/heuristic)")
     parser.add_argument("--az_best_by", type=str, default="heuristic", choices=("loss", "heuristic"), help="AlphaZero: save best by loss or by heuristic win rate")
     parser.add_argument("--az_eval_games_best", type=int, default=100, help="AlphaZero eval games vs heuristic when saving best by heuristic")
+    # Hybrid-specific (ignored unless agent_type == hybrid)
+    parser.add_argument("--hybrid_lr_min", type=float, default=1e-4, help="Hybrid cosine scheduler minimum LR")
+    parser.add_argument("--hybrid_weight_decay", type=float, default=1e-4, help="Hybrid AdamW weight decay")
+    parser.add_argument("--hybrid_grad_clip_norm", type=float, default=1.0, help="Hybrid gradient clipping max_norm")
     # DQN-specific (ignored when agent_type == alphazero)
     parser.add_argument("--gamma", type=float, default=0.99, help="DQN discount factor")
     parser.add_argument("--epsilon_start", type=float, default=1.0, help="DQN initial exploration")
@@ -425,6 +509,8 @@ def main() -> None:
 
     if args.agent_type == "alphazero":
         _run_alphazero_training(args, device)
+    elif args.agent_type == "hybrid":
+        _run_hybrid_training(args, device)
     elif args.agent_type == "dqn":
         _run_dqn_training(args, device)
     else:
@@ -446,7 +532,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
             except ValueError:
                 pass
 
-    bot = Bot(
+    bot = AlphaZeroBot(
         model=model,
         board_size=args.board_size,
         device=device,
@@ -488,13 +574,13 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
 
         # Select league path for this iteration (if any)
         league_path: str | None = None
-        league_bot: Bot | None = None
+        league_bot: AlphaZeroBot | None = None
         if checkpoint_pool and args.league_prob > 0:
             league_path = random.choice(checkpoint_pool)
             if args.num_workers == 1:
                 league_model = AlphaZeroTransform(board_size=args.board_size).to(device)
                 load_weights(league_model, league_path, device)
-                league_bot = Bot(
+                league_bot = AlphaZeroBot(
                     model=league_model,
                     board_size=args.board_size,
                     device=device,
@@ -662,6 +748,196 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
 
     print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))
     print("AlphaZero training complete.")
+
+
+def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None:
+    """Hybrid (CNN+Transformer) AlphaZero self-play and training loop."""
+    if args.board_size != 9:
+        raise ValueError("Hybrid architecture currently supports --board_size 9 only.")
+
+    model = AlphaZeroHybrid(board_size=args.board_size).to(device)
+    iteration_offset = 0
+    if args.resume and os.path.isfile(args.resume):
+        load_weights(model, args.resume, device)
+        print(f"Resumed from {args.resume}")
+        base = os.path.basename(args.resume)
+        if base.startswith("hybrid_checkpoint_") and base.endswith(".pt"):
+            try:
+                iteration_offset = int(base[len("hybrid_checkpoint_") : -len(".pt")])
+            except ValueError:
+                pass
+
+    bot = HybridBot(
+        model=model,
+        board_size=args.board_size,
+        device=device,
+        num_simulations=args.num_simulations,
+        compile_model=not args.no_compile,
+        mcts_batch_size=args.mcts_batch_size,
+        use_amp=args.amp,
+    )
+    optimizer = torch.optim.AdamW(
+        bot.model.parameters(),
+        lr=args.learning_rate,
+        weight_decay=args.hybrid_weight_decay,
+    )
+
+    # Approximate total updates for cosine decay.
+    est_positions_per_game = 45
+    est_batches_per_epoch = max(1, math.ceil((args.games_per_iteration * est_positions_per_game) / args.batch_size))
+    total_scheduler_steps = max(1, args.iterations * args.train_epochs * est_batches_per_epoch)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=total_scheduler_steps,
+        eta_min=args.hybrid_lr_min,
+    )
+
+    buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
+    buffer_max_size = args.games_per_iteration * 200
+    best_loss = float("inf")
+    best_heuristic_wr = -1.0
+    total_iterations = args.iterations
+    checkpoint_pool: list[str] = []
+
+    def log_self_play(current: int, total: int) -> None:
+        msg = progress_bar(current, total, width=25, prefix="  Self-play ", suffix=" games")
+        sys.stdout.write(f"\r{msg}")
+        sys.stdout.flush()
+
+    total_display = iteration_offset + total_iterations
+    for i in range(total_iterations):
+        iteration = iteration_offset + i + 1
+        iter_msg = progress_bar(iteration, total_display, width=30, prefix="Iteration ", suffix="")
+        print(iter_msg)
+
+        league_bot: HybridBot | None = None
+        if checkpoint_pool and args.league_prob > 0:
+            league_path = random.choice(checkpoint_pool)
+            league_model = AlphaZeroHybrid(board_size=args.board_size).to(device)
+            load_weights(league_model, league_path, device)
+            league_bot = HybridBot(
+                model=league_model,
+                board_size=args.board_size,
+                device=device,
+                num_simulations=args.num_simulations,
+                compile_model=not args.no_compile,
+                mcts_batch_size=args.mcts_batch_size,
+                use_amp=args.amp,
+            )
+            league_bot.model.eval()
+
+        new_data, self_play_stats = self_play(
+            bot,
+            args.board_size,
+            args.games_per_iteration,
+            c_puct=args.c_puct,
+            self_play_temp=args.self_play_temp,
+            temp_moves=args.temp_moves,
+            progress_callback=log_self_play,
+            league_bot=league_bot,
+            league_prob=args.league_prob,
+            heuristic_prob=args.heuristic_prob,
+            add_root_noise=not args.no_root_noise,
+            root_dirichlet_alpha=args.root_dirichlet_alpha,
+            root_dirichlet_epsilon=args.root_dirichlet_epsilon,
+        )
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        sys.stdout.flush()
+        buffer.extend(new_data)
+        if len(buffer) > buffer_max_size:
+            buffer = buffer[-buffer_max_size:]
+
+        random.shuffle(buffer)
+        total_pl = 0.0
+        total_vl = 0.0
+        n_batches = 0
+        for _epoch in range(args.train_epochs):
+            for start in range(0, len(buffer), args.batch_size):
+                batch = buffer[start : start + args.batch_size]
+                if len(batch) < 2:
+                    continue
+                pl, vl = train_step_hybrid(
+                    batch=batch,
+                    model=bot.model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    board_size=args.board_size,
+                    device=device,
+                    value_coef=args.value_coef,
+                    grad_clip_norm=args.hybrid_grad_clip_norm,
+                )
+                total_pl += pl
+                total_vl += vl
+                n_batches += 1
+
+        total_games = (
+            self_play_stats["wins"] + self_play_stats["losses"] + self_play_stats["draws"]
+        )
+        game_success_rate = self_play_stats["wins"] / total_games if total_games else 0.0
+        game_type_log = (
+            f"league={self_play_stats['games_league']} "
+            f"heuristic={self_play_stats['games_heuristic']} "
+            f"self_play={self_play_stats['games_self_play']}"
+        )
+
+        if n_batches > 0:
+            avg_pl = total_pl / n_batches
+            avg_vl = total_vl / n_batches
+            avg_loss = avg_pl + args.value_coef * avg_vl
+            print(
+                f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} total={avg_loss:.4f} "
+                f"buffer={len(buffer)} lr={optimizer.param_groups[0]['lr']:.6f} "
+                f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
+            )
+            if args.az_best_by == "loss" and avg_loss < best_loss:
+                best_loss = avg_loss
+                save_model_weights(bot.model, args.save_best_path)
+                print(f"  -> saved best (by loss) to {args.save_best_path}")
+        else:
+            print(
+                f"  Buffer size {len(buffer)} too small; skipping train  "
+                f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
+            )
+
+        if iteration % args.az_eval_freq == 0 or iteration == total_display:
+            eval_random = evaluate_alphazero(
+                bot=bot,
+                board_size=args.board_size,
+                num_games=args.eval_games,
+                opponent="random",
+            )
+            n_heuristic = (
+                args.az_eval_games_best
+                if args.az_best_by == "heuristic"
+                else args.eval_games
+            )
+            eval_heuristic = evaluate_alphazero(
+                bot=bot,
+                board_size=args.board_size,
+                num_games=n_heuristic,
+                opponent="heuristic",
+            )
+            print(
+                f"  Eval: vs_random win_rate={eval_random['win_rate']:.2f}  "
+                f"vs_heuristic win_rate={eval_heuristic['win_rate']:.2f}"
+            )
+            if (
+                args.az_best_by == "heuristic"
+                and eval_heuristic["win_rate"] > best_heuristic_wr
+            ):
+                best_heuristic_wr = eval_heuristic["win_rate"]
+                save_model_weights(bot.model, args.save_best_path)
+                print(f"  -> saved best (by heuristic) to {args.save_best_path}")
+
+        if iteration % 5 == 0 or iteration == total_display:
+            ckpt_path = os.path.join(args.checkpoint_dir, f"hybrid_checkpoint_{iteration}.pt")
+            save_model_weights(bot.model, ckpt_path)
+            checkpoint_pool.append(ckpt_path)
+            checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
+            print(f"  -> checkpoint {ckpt_path}")
+
+    print(progress_bar(total_display, total_display, width=30, prefix="Done.       ", suffix=""))
+    print("Hybrid AlphaZero training complete.")
 
 
 def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
