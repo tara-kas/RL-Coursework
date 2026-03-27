@@ -78,7 +78,7 @@ setenv PATH "$HOME/.local/bin:$PATH"
 setenv UV_CACHE_DIR "/tmp/tmoody_uv_cache"
 
 # Assign exactly one GPU
-source /opt/cuda/scripts/CUDA_VISIBILITY.csh)
+source /opt/cuda/scripts/CUDA_VISIBILITY.csh
 ```
 
 Save and Exit
@@ -110,7 +110,7 @@ git clone https://github.com/tara-kas/RL-Coursework
 
 Enter the repository with:
 ```bash
-ls RL-Coursework
+cd RL-Coursework
 ```
 
 Install pip into python by running:
