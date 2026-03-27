@@ -12,6 +12,7 @@ Use external gateway with your normal UCL account by running:
 ssh <user>@ssh-gateway.ucl.ac.uk
 ```
 >(e.g. ssh zcabtem@ssh-gateway.ucl.ac.uk)
+>(e.g. ssh zcabkas@ssh-gateway.ucl.ac.uk)
 
 
 Once in external gateway, access internal CS gateway machine with your CS account:
@@ -20,6 +21,8 @@ Once in external gateway, access internal CS gateway machine with your CS accoun
 ssh <cs-account>@knuckles.cs.ucl.ac.uk
 ```
 >(e.g. ssh tmoody@knuckles.cs.ucl.ac.uk)
+>(e.g. ssh tkasayap@knuckles.cs.ucl.ac.uk)
+
 
 Once in internal CS gateway machine, access the timeshare machine with your CS account:
 
@@ -27,6 +30,7 @@ Once in internal CS gateway machine, access the timeshare machine with your CS a
 ssh <cs-account>@<machine>.cs.ucl.ac.uk
 ```
 >(e.g. ssh tmoody@cream.cs.ucl.ac.uk)
+>(e.g. ssh tkasayap@vanilla.cs.ucl.ac.uk)
 
 Available machines include:
 - blaze: 4x Titan X cards, 64GB RAM
