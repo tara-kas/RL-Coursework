@@ -85,6 +85,7 @@ setenv UV_CACHE_DIR "/tmp/tmoody_uv_cache"
 
 # Assign exactly one GPU
 source /opt/cuda/scripts/CUDA_VISIBILITY.csh
+<<<<<<< HEAD
 ```
 
 example:
@@ -98,6 +99,8 @@ setenv UV_CACHE_DIR "/tmp/tkasayap_uv_cache"
 
 # Assign exactly one GPU
 source /opt/cuda/scripts/CUDA_VISIBILITY.csh
+=======
+>>>>>>> 1848b6751e444170864d81c28c6d6bdbed445816
 ```
 
 Save and Exit
