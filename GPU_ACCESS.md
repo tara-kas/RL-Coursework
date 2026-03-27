@@ -85,22 +85,6 @@ setenv UV_CACHE_DIR "/tmp/tmoody_uv_cache"
 
 # Assign exactly one GPU
 source /opt/cuda/scripts/CUDA_VISIBILITY.csh
-<<<<<<< HEAD
-```
-
-example:
-```bash 
-# Ensure the UV cache directory exists on this specific machine
-mkdir -p /tmp/tkasayap_uv_cache
-
-# Set environment variables
-setenv PATH "$HOME/.local/bin:$PATH"
-setenv UV_CACHE_DIR "/tmp/tkasayap_uv_cache"
-
-# Assign exactly one GPU
-source /opt/cuda/scripts/CUDA_VISIBILITY.csh
-=======
->>>>>>> 1848b6751e444170864d81c28c6d6bdbed445816
 ```
 
 Save and Exit
@@ -143,6 +127,22 @@ python -m pip install uv
 You can then initialise the project with:
 ```bash
 uv venv .venv --python 3.11
+```
+> you may need to re run "source ~/.uclcs-csh-aliases"
+
+Sync your venv with
+```bash
+uv sync
+```
+
+Add the following packages to your uv environment with
+```bash
+uv add torch torchvision torchaudio
+```
+
+You can now run any of the regular commands e.g.:
+```bash
+uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 1 --worker_device cuda --no-compile --mcts_batch_size 64 --batch_size 128 --iterations 300 --games_per_iteration 200 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.4 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25
 ```
 
 hope this helps you guys out :)
