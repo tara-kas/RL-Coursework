@@ -151,7 +151,7 @@ uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers
 
 Now I am running:
 
-uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 14 --worker_device cuda --no-compile --mcts_batch_size 64 --batch_size 512 --iterations 300 --games_per_iteration 400 --eval_games 200 --learning_rate 5e-4 --num_simulations 400 --value_coef 1.0 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 12 --league_prob 0.2 --heuristic_prob 0.15 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25
+uv run python train.py --board_size 9 --agent_type alphazero-resnet --amp --num_workers 6 --worker_device cuda --mcts_batch_size 128 --batch_size 512 --iterations 300 --games_per_iteration 400 --eval_games 200 --learning_rate 5e-4 --num_simulations 600 --value_coef 1.0 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 12 --league_prob 0.2 --heuristic_prob 0.15 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_40.pt
 
 DQN:
 Initial:
