@@ -22,7 +22,14 @@ from src.gomoku_game import (
     get_legal_moves,
 )
 from src.gomoku_utils import preprocess_board
-from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot as AlphaZeroBot
+from src.Bots.alpha_zero_resnet import (
+    AlphaZeroTransform as AlphaZeroResNet,
+    Bot as AlphaZeroResNetBot,
+)
+from src.Bots.alpha_zero_transformer import (
+    AlphaZeroTransform as AlphaZeroTransformer,
+    Bot as AlphaZeroTransformerBot,
+)
 from src.Bots.alpha_zero_hybrid import AlphaZeroHybrid, Bot as HybridBot
 from src.Bots.heuristic_tactical import predict as heuristic_predict
 from src.Bots.dqn import (
@@ -34,6 +41,17 @@ from src.Bots.dqn import (
     evaluate_dqn,
 )
 from src.model_loader import save_weights as save_model_weights, load_weights
+
+
+def _get_alphazero_impl(
+    agent_type: str,
+) -> tuple[type[torch.nn.Module], type[AlphaZeroResNetBot | AlphaZeroTransformerBot], str]:
+    """Return (model_class, bot_class, variant_label) for AlphaZero variants."""
+    if agent_type in ("alphazero", "alphazero-resnet"):
+        return AlphaZeroResNet, AlphaZeroResNetBot, "resnet"
+    if agent_type == "alphazero-transformer":
+        return AlphaZeroTransformer, AlphaZeroTransformerBot, "transformer"
+    raise ValueError(f"Unsupported AlphaZero agent_type: {agent_type}")
 
 
 def progress_bar(
@@ -58,14 +76,14 @@ def progress_bar(
 
 
 def self_play(
-    bot: AlphaZeroBot | HybridBot,
+    bot: AlphaZeroResNetBot | AlphaZeroTransformerBot | HybridBot,
     board_size: int,
     num_games: int,
     c_puct: float = 1.5,
     self_play_temp: float = 1.0,
     temp_moves: int = 30,
     progress_callback: Callable[[int, int], None] | None = None,
-    league_bot: AlphaZeroBot | HybridBot | None = None,
+    league_bot: AlphaZeroResNetBot | AlphaZeroTransformerBot | HybridBot | None = None,
     league_prob: float = 0.0,
     heuristic_prob: float = 0.0,
     add_root_noise: bool = True,
@@ -164,6 +182,7 @@ def _worker_self_play(
     num_games: int,
     board_size: int,
     num_simulations: int,
+    alphazero_agent_type: str,
     mcts_batch_size: int,
     c_puct: float,
     self_play_temp: float,
@@ -189,11 +208,12 @@ def _worker_self_play(
         torch.manual_seed(seed_base + worker_id)
 
     device = torch.device(device_str)
-    model = AlphaZeroTransform(board_size=board_size).to(device)
+    model_cls, bot_cls, _ = _get_alphazero_impl(alphazero_agent_type)
+    model = model_cls(board_size=board_size).to(device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
 
-    bot = AlphaZeroBot(
+    bot = bot_cls(
         model=model,
         board_size=board_size,
         device=device,
@@ -203,11 +223,11 @@ def _worker_self_play(
         use_amp=use_amp,
     )
 
-    league_bot: AlphaZeroBot | None = None
+    league_bot: AlphaZeroResNetBot | AlphaZeroTransformerBot | None = None
     if league_path and league_prob > 0 and os.path.isfile(league_path):
-        league_model = AlphaZeroTransform(board_size=board_size).to(device)
+        league_model = model_cls(board_size=board_size).to(device)
         load_weights(league_model, league_path, device)
-        league_bot = AlphaZeroBot(
+        league_bot = bot_cls(
             model=league_model,
             board_size=board_size,
             device=device,
@@ -366,7 +386,7 @@ def train_step_hybrid(
 
 
 def evaluate_alphazero(
-    bot: AlphaZeroBot | HybridBot,
+    bot: AlphaZeroResNetBot | AlphaZeroTransformerBot | HybridBot,
     board_size: int,
     num_games: int,
     opponent: str,
@@ -429,9 +449,16 @@ def main() -> None:
     parser.add_argument(
         "--agent_type",
         type=str,
-        default="alphazero",
-        choices=["alphazero", "hybrid", "dqn"],
-        help="Agent type: alphazero (ResNet), hybrid (CNN+Transformer), or dqn",
+        default="alphazero-resnet",
+        choices=[
+            "alphazero",
+            "alphazero-resnet",
+            "alphazero-transformer",
+            "hybrid",
+            "alphazero-hybrid",
+            "dqn",
+        ],
+        help="Agent type: alphazero-resnet, alphazero-transformer, hybrid (or alphazero-hybrid), or dqn",
     )
     parser.add_argument(
         "--board_size",
@@ -473,7 +500,7 @@ def main() -> None:
     parser.add_argument("--hybrid_lr_min", type=float, default=1e-4, help="Hybrid cosine scheduler minimum LR")
     parser.add_argument("--hybrid_weight_decay", type=float, default=1e-4, help="Hybrid AdamW weight decay")
     parser.add_argument("--hybrid_grad_clip_norm", type=float, default=1.0, help="Hybrid gradient clipping max_norm")
-    # DQN-specific (ignored when agent_type == alphazero)
+    # DQN-specific (ignored unless agent_type == dqn)
     parser.add_argument("--gamma", type=float, default=0.99, help="DQN discount factor")
     parser.add_argument("--epsilon_start", type=float, default=1.0, help="DQN initial exploration")
     parser.add_argument("--epsilon_end", type=float, default=0.05, help="DQN final exploration")
@@ -507,9 +534,9 @@ def main() -> None:
         print(f"Using device: {device} (CUDA not available)")
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    if args.agent_type == "alphazero":
+    if args.agent_type in ("alphazero", "alphazero-resnet", "alphazero-transformer"):
         _run_alphazero_training(args, device)
-    elif args.agent_type == "hybrid":
+    elif args.agent_type in ("hybrid", "alphazero-hybrid"):
         _run_hybrid_training(args, device)
     elif args.agent_type == "dqn":
         _run_dqn_training(args, device)
@@ -519,7 +546,9 @@ def main() -> None:
 
 def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> None:
     """AlphaZero self-play and training loop."""
-    model = AlphaZeroTransform(board_size=args.board_size).to(device)
+    model_cls, bot_cls, variant_label = _get_alphazero_impl(args.agent_type)
+    print(f"AlphaZero variant: {variant_label}")
+    model = model_cls(board_size=args.board_size).to(device)
     iteration_offset = 0
     if args.resume and os.path.isfile(args.resume):
         load_weights(model, args.resume, device)
@@ -532,7 +561,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
             except ValueError:
                 pass
 
-    bot = AlphaZeroBot(
+    bot = bot_cls(
         model=model,
         board_size=args.board_size,
         device=device,
@@ -574,13 +603,13 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
 
         # Select league path for this iteration (if any)
         league_path: str | None = None
-        league_bot: AlphaZeroBot | None = None
+        league_bot: AlphaZeroResNetBot | AlphaZeroTransformerBot | None = None
         if checkpoint_pool and args.league_prob > 0:
             league_path = random.choice(checkpoint_pool)
             if args.num_workers == 1:
-                league_model = AlphaZeroTransform(board_size=args.board_size).to(device)
+                league_model = model_cls(board_size=args.board_size).to(device)
                 load_weights(league_model, league_path, device)
-                league_bot = AlphaZeroBot(
+                league_bot = bot_cls(
                     model=league_model,
                     board_size=args.board_size,
                     device=device,
@@ -625,6 +654,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                         games_this_worker,
                         args.board_size,
                         args.num_simulations,
+                        args.agent_type,
                         args.mcts_batch_size,
                         args.c_puct,
                         args.self_play_temp,
