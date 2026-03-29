@@ -1120,4 +1120,7 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
 
 
 if __name__ == "__main__":
+    import torch.multiprocessing as mp
+    mp.set_sharing_strategy('file_system')
+    
     main()
