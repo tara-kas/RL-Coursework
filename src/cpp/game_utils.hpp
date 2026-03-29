@@ -8,19 +8,22 @@
 #include <utility>
 #include <stdexcept>
 
+#define BOARD_SIZE 9
+#define BOARD_AREA (BOARD_SIZE * BOARD_SIZE)
+
 namespace py = pybind11;
 
 int getGameResult(std::vector<int>& fastBoard, short lastMove, int lastPlayer) {
-    if (lastMove < 0 || lastMove >= 225) return -1;
+    if (lastMove < 0 || lastMove >= BOARD_AREA) return -1;
     
-    int newX = lastMove / 15;
-    int newY = lastMove % 15;
+    int newX = lastMove / BOARD_SIZE;
+    int newY = lastMove % BOARD_SIZE;
 
     int count = 0;
     for(int cell = 0; cell < 9; ++cell) {
         int nx = newX - 4 + cell;
-        if(nx >= 0 && nx < 15) {
-            if(fastBoard[nx * 15 + newY] == lastPlayer) {
+        if(nx >= 0 && nx < BOARD_SIZE) {
+            if(fastBoard[nx * BOARD_SIZE + newY] == lastPlayer) {
                 count++;
                 if(count == 5) {
                     return 1;
@@ -35,8 +38,8 @@ int getGameResult(std::vector<int>& fastBoard, short lastMove, int lastPlayer) {
     count = 0;
     for(int cell = 0; cell < 9; ++cell) {
         int ny = newY - 4 + cell;
-        if(ny >= 0 && ny < 15) {
-            if(fastBoard[newX * 15 + ny] == lastPlayer) {
+        if(ny >= 0 && ny < BOARD_SIZE) {
+            if(fastBoard[newX * BOARD_SIZE + ny] == lastPlayer) {
                 count++;
                 if(count == 5) {
                     return 1;
@@ -52,8 +55,8 @@ int getGameResult(std::vector<int>& fastBoard, short lastMove, int lastPlayer) {
     for(int cell = 0; cell < 9; ++cell) {
         int nx = newX - 4 + cell;
         int ny = newY - 4 + cell;
-        if(nx >= 0 && nx < 15 && ny >=0 && ny < 15) {
-            if(fastBoard[nx * 15 + ny] == lastPlayer) {
+        if(nx >= 0 && nx < BOARD_SIZE && ny >=0 && ny < BOARD_SIZE) {
+            if(fastBoard[nx * BOARD_SIZE + ny] == lastPlayer) {
                 count++;
                 if(count == 5) {
                     return 1;
@@ -69,8 +72,8 @@ int getGameResult(std::vector<int>& fastBoard, short lastMove, int lastPlayer) {
     for(int cell = 0; cell < 9; ++cell) {
         int nx = newX + 4 - cell;
         int ny = newY - 4 + cell;
-        if(nx >= 0 && nx < 15 && ny >=0 && ny < 15) {
-            if(fastBoard[nx * 15 + ny] == lastPlayer) {
+        if(nx >= 0 && nx < BOARD_SIZE && ny >=0 && ny < BOARD_SIZE) {
+            if(fastBoard[nx * BOARD_SIZE + ny] == lastPlayer) {
                 count++;
                 if(count == 5) {
                     return 1;
@@ -83,7 +86,7 @@ int getGameResult(std::vector<int>& fastBoard, short lastMove, int lastPlayer) {
     }
 
     bool isFull = true;
-    for (int i = 0; i < 225; ++i) {
+    for (int i = 0; i < BOARD_AREA; ++i) {
         if (fastBoard[i] == -1) {
             isFull = false;
             break;

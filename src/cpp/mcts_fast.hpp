@@ -43,10 +43,10 @@ public:
     void setRootState(py::array_t<float> pyBoard, int curPlayer) {
         auto fastBoard = pyBoard.unchecked<2>();
         
-        rootBoard.resize(225); // 15x15 = 225 flat array
-        for (int r = 0; r < 15; ++r) {
-            for (int c = 0; c < 15; ++c) {
-                rootBoard[r * 15 + c] = fastBoard(r, c);
+        rootBoard.resize(BOARD_AREA); // 9x9 = 81 flat array
+        for (int r = 0; r < BOARD_SIZE; ++r) {
+            for (int c = 0; c < BOARD_SIZE; ++c) {
+                rootBoard[r * BOARD_SIZE + c] = fastBoard(r, c);
             }
         }
         rootPlayer = curPlayer;
@@ -140,7 +140,7 @@ public:
         batchPaths.clear();
         batchLeafIdxs.clear();
 
-        py::array_t<float> batchedBoards({batchSize, 15, 15});
+        py::array_t<float> batchedBoards({batchSize, BOARD_SIZE, BOARD_SIZE});
         auto mutableBoards = batchedBoards.mutable_unchecked<3>();
 
         int validLeaves = 0;
@@ -159,15 +159,15 @@ public:
             batchPaths.push_back(path);
             batchLeafIdxs.push_back(leafIdx);
 
-            for(int x = 0; x < 15; ++x) {
-                for(int y = 0; y < 15; ++y) {
-                    mutableBoards(validLeaves, x, y) = static_cast<float>(simBoard[x*15 + y]);
+            for(int x = 0; x < BOARD_SIZE; ++x) {
+                for(int y = 0; y < BOARD_SIZE; ++y) {
+                    mutableBoards(validLeaves, x, y) = static_cast<float>(simBoard[x*BOARD_SIZE + y]);
                 }
             }
             validLeaves++;
         }
 
-        batchedBoards.resize({validLeaves, 15, 15});
+        batchedBoards.resize({validLeaves, BOARD_SIZE, BOARD_SIZE});
         return batchedBoards;
 
     }
@@ -184,7 +184,7 @@ public:
 
             short numLegal = 0;
 
-            for(short move = 0; move < 225; ++move) {
+            for(short move = 0; move < BOARD_AREA; ++move) {
                 float p = policies(i, move);
                 if(p > 1e-6) {
                     allocateNode(leafIdx, move, 1 - arena[leafIdx].curPlayer, p);
@@ -197,7 +197,7 @@ public:
     }
 
     std::vector<int> getRootVisits() {
-        std::vector<int> visits(225, 0); 
+        std::vector<int> visits(BOARD_AREA, 0); 
 
         for (int i = 0; i < arena[rootIdx].numChildren; ++i) {
             int childIdx = arena[rootIdx].firstChildIdx + i;
@@ -232,9 +232,9 @@ public:
             arena[rootIdx].parentIdx = -1; // Sever the parent link so backupPath doesn't go too high
             
             auto fastBoard = pyBoard.unchecked<2>();
-            for (int r = 0; r < 15; ++r) {
-                for (int c = 0; c < 15; ++c) {
-                    rootBoard[r * 15 + c] = fastBoard(r, c);
+            for (int r = 0; r < BOARD_SIZE; ++r) {
+                for (int c = 0; c < BOARD_SIZE; ++c) {
+                    rootBoard[r * BOARD_SIZE + c] = fastBoard(r, c);
                 }
             }
             rootPlayer = curPlayer;

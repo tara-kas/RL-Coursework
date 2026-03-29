@@ -26,12 +26,14 @@ def run_fast_mcts_with_policy(
     device: torch.device = torch.device("cuda")
 ) -> tuple[tuple[int, int], np.ndarray, float]:
     
+    board_size = board.shape[0]
+    
     if last_move is None:
         # Very first turn of the game
         tree.setRootState(board.astype(np.float32), current_player)
     else:
         # Convert 2D move to 1D move for C++
-        move_1d = last_move[0] * 15 + last_move[1]
+        move_1d = last_move[0] * board_size + last_move[1]
         tree.changeRoot(move_1d, board.astype(np.float32), current_player)
 
     sims_completed = 0
@@ -52,7 +54,7 @@ def run_fast_mcts_with_policy(
         
         # Build the 3 planes: [Current Player Pieces, Opponent Pieces, Color to Play]
         # 1. Pre-allocate the memory exactly ONCE
-        planes = torch.empty((actual_batch, 3, 15, 15), dtype=torch.float32, device=device)
+        planes = torch.empty((actual_batch, 3, board_size, board_size), dtype=torch.float32, device=device)
         
         # 2. Fill the memory in-place (drastically reduces GPU overhead)
         planes[:, 0, :, :] = (batch_tensor == current_player).float()
@@ -60,11 +62,11 @@ def run_fast_mcts_with_policy(
         planes[:, 2, :, :] = float(current_player)
         
         # 3. Create the mask directly
-        mask = (batch_tensor.view(actual_batch, 225) == -1).float()
+        mask = (batch_tensor.view(actual_batch, board_size * board_size) == -1).float()
         
         # Build the legal move mask (batch_size, 225) -> 1 is legal, 0 is illegal
         # -1 represents an empty square in your game logic
-        mask = (batch_tensor.view(actual_batch, 225) == -1).float()
+        mask = (batch_tensor.view(actual_batch, board_size * board_size) == -1).float()
 
         # --- THE NET (Predict on GPU) ---
         with torch.inference_mode():
@@ -91,7 +93,7 @@ def run_fast_mcts_with_policy(
 
     # Pick the best move (highest visit count)
     best_move_idx = int(np.argmax(visits_1d))
-    best_move_2d = (best_move_idx // 15, best_move_idx % 15)
+    best_move_2d = (best_move_idx // board_size, best_move_idx % board_size)
 
     root_value = tree.get_root_value()
 
@@ -238,7 +240,7 @@ class Bot(BaseBot):
         import mcts_cpp
         temp_tree = mcts_cpp.MCTS()
 
-        best_move, _ = run_fast_mcts_with_policy(
+        best_move, _, _ = run_fast_mcts_with_policy(
             temp_tree,
             board_state.copy(),
             current_player,
