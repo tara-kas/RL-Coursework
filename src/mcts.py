@@ -157,6 +157,7 @@ def _run_mcts_simulations(
 
         unique_nodes = list(dict.fromkeys(node for node, _ in leaves))
         n_unique = len(unique_nodes)
+        planes_batch.zero_()
 
         for u, node in enumerate(unique_nodes):
             planes = preprocess_board(node.board, node.current_player)
@@ -171,12 +172,12 @@ def _run_mcts_simulations(
         with torch.inference_mode():
             if use_amp and device.type == "cuda":
                 with torch.autocast(device_type="cuda"):
-                    policy_batch, value_batch = model(planes_batch[:n_unique], mask_batch[:n_unique])
+                    policy_batch, value_batch = model(planes_batch, mask_batch)
             else:
-                policy_batch, value_batch = model(planes_batch[:n_unique], mask_batch[:n_unique])
+                policy_batch, value_batch = model(planes_batch, mask_batch)
 
-        value_batch = value_batch.cpu().numpy().ravel()
-        policy_batch = policy_batch.cpu().numpy()
+        value_batch = value_batch[:n_unique].cpu().numpy().ravel()
+        policy_batch = policy_batch[:n_unique].cpu().numpy()
 
         node_to_idx = {id(n): i for i, n in enumerate(unique_nodes)}
         expanded: set[int] = set()

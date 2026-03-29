@@ -27,6 +27,16 @@ def run_fast_mcts_with_policy(
 ) -> tuple[tuple[int, int], np.ndarray, float]:
     
     board_size = board.shape[0]
+    planes = torch.empty(
+        (batch_size, 3, board_size, board_size),
+        dtype=torch.float32,
+        device=device,
+    )
+    mask = torch.zeros(
+        (batch_size, board_size * board_size),
+        dtype=torch.float32,
+        device=device,
+    )
     
     if last_move is None:
         # Very first turn of the game
@@ -49,32 +59,25 @@ def run_fast_mcts_with_policy(
             continue
 
         # --- PREPROCESS FOR RESNET ---
-        # Convert raw (B, 15, 15) array to PyTorch tensor
+        # Convert raw (B, board_size, board_size) array to PyTorch tensor
         batch_tensor = torch.from_numpy(batch_boards).to(device)
-        
-        # Build the 3 planes: [Current Player Pieces, Opponent Pieces, Color to Play]
-        # 1. Pre-allocate the memory exactly ONCE
-        planes = torch.empty((actual_batch, 3, board_size, board_size), dtype=torch.float32, device=device)
-        
-        # 2. Fill the memory in-place (drastically reduces GPU overhead)
-        planes[:, 0, :, :] = (batch_tensor == current_player).float()
-        planes[:, 1, :, :] = (batch_tensor == (1 - current_player)).float()
-        planes[:, 2, :, :] = float(current_player)
-        
-        # 3. Create the mask directly
-        mask = (batch_tensor.view(actual_batch, board_size * board_size) == -1).float()
-        
-        # Build the legal move mask (batch_size, 225) -> 1 is legal, 0 is illegal
-        # -1 represents an empty square in your game logic
-        mask = (batch_tensor.view(actual_batch, board_size * board_size) == -1).float()
+        planes.zero_()
+        mask.zero_()
+
+        planes[:actual_batch, 0, :, :] = (batch_tensor == current_player).float()
+        planes[:actual_batch, 1, :, :] = (batch_tensor == (1 - current_player)).float()
+        planes[:actual_batch, 2, :, :] = float(current_player)
+        mask[:actual_batch] = (
+            batch_tensor.view(actual_batch, board_size * board_size) == -1
+        ).float()
 
         # --- THE NET (Predict on GPU) ---
         with torch.inference_mode():
             policy, value = model(planes, mask)
             
             # Move back to CPU for C++
-            policy_np = policy.cpu().numpy()
-            value_np = value.view(-1).cpu().numpy()
+            policy_np = policy[:actual_batch].cpu().numpy()
+            value_np = value[:actual_batch].view(-1).cpu().numpy()
 
         # --- PONG (Send back to C++) ---
         tree.expand_backup(policy_np, value_np)
