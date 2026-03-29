@@ -9,6 +9,7 @@ import os
 import random
 import sys
 from typing import Callable
+import torch.multiprocessing as mp
 
 import numpy as np
 import torch
@@ -445,6 +446,13 @@ def evaluate_alphazero(
 
 
 def main() -> None:
+    # Set the start method to 'spawn' at the very beginning of main
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # Method might already be set
+        pass
+    
     parser = argparse.ArgumentParser(description="Gomoku self-play training (AlphaZero, Hybrid, or DQN)")
     parser.add_argument(
         "--agent_type",
@@ -1120,7 +1128,4 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
 
 
 if __name__ == "__main__":
-    import torch.multiprocessing as mp
-    mp.set_sharing_strategy('file_system')
-    
     main()
