@@ -8,6 +8,20 @@ FPS = 60
 def main():
     parser = argparse.ArgumentParser(description="Gomoku game (player vs AlphaZero)")
     parser.add_argument(
+        "--agent_type",
+        type=str,
+        default=None,
+        choices=[
+            "alphazero",
+            "alphazero-resnet",
+            "alphazero-transformer",
+            "hybrid",
+            "alphazero-hybrid",
+            "dqn",
+        ],
+        help="Bot type to load for the AI opponent. If omitted, infer from --weights when possible and default to alphazero-resnet.",
+    )
+    parser.add_argument(
         "--weights",
         type=str,
         default=None,
@@ -22,7 +36,15 @@ def main():
     )
     args = parser.parse_args()
 
-    window = Window(720, 720, "Game", "game", args.weights, args.board_size)
+    window = Window(
+        720,
+        720,
+        "Game",
+        "game",
+        weights_path=args.weights,
+        board_size=args.board_size,
+        agent_type=args.agent_type,
+    )
 
     while window.running:
         window.handle_events()

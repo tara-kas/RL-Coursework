@@ -30,6 +30,7 @@ class GameScene(Scene):
         scene_manager: SceneManager,
         weights_path: str | None = None,
         board_size: int = 15,
+        agent_type: str | None = None,
     ):
         super().__init__(scene_manager)
         
@@ -85,9 +86,37 @@ class GameScene(Scene):
         self.bottom_y = self.top_y + num_gaps * tile_size
 
         weights = weights_path if weights_path is not None else DEFAULT_WEIGHTS_PATH
-        is_dqn = weights and "dqn" in os.path.basename(weights).lower()
-        bot_file = "dqn" if is_dqn else "alpha_zero_transform"
-        bot_name = "DQN" if is_dqn else "AlphaZero"
+
+        inferred_agent_type = agent_type
+        if inferred_agent_type is None:
+            basename = os.path.basename(weights).lower() if weights else ""
+            if "dqn" in basename:
+                inferred_agent_type = "dqn"
+            elif "transformer" in basename:
+                inferred_agent_type = "alphazero-transformer"
+            elif "hybrid" in basename:
+                inferred_agent_type = "alphazero-hybrid"
+            else:
+                inferred_agent_type = "alphazero-resnet"
+
+        bot_module_by_agent = {
+            "dqn": "dqn",
+            "alphazero": "alpha_zero_resnet",
+            "alphazero-resnet": "alpha_zero_resnet",
+            "alphazero-transformer": "alpha_zero_transformer",
+            "hybrid": "alpha_zero_hybrid",
+            "alphazero-hybrid": "alpha_zero_hybrid",
+        }
+        bot_label_by_agent = {
+            "dqn": "DQN",
+            "alphazero": "AlphaZero ResNet",
+            "alphazero-resnet": "AlphaZero ResNet",
+            "alphazero-transformer": "AlphaZero Transformer",
+            "hybrid": "AlphaZero Hybrid",
+            "alphazero-hybrid": "AlphaZero Hybrid",
+        }
+        bot_file = bot_module_by_agent.get(inferred_agent_type, "alpha_zero_resnet")
+        bot_name = bot_label_by_agent.get(inferred_agent_type, "AlphaZero ResNet")
 
         bot_kwargs: dict[str, object] = {"weights_path": weights, "board_size": board_size}
 
@@ -115,7 +144,7 @@ class GameScene(Scene):
             bot_name = self.game_logic.users[self.game_logic.current_turn]["name"]
             move = self.game_logic.get_bot_move(bot_name)
 
-            if self.game_logic.check_valid_move(move):
+            if move is not None and self.game_logic.check_valid_move(move):
                 self.game_logic.make_move(self.game_logic.current_turn, move)
                 self.game_logic.next_turn()
         

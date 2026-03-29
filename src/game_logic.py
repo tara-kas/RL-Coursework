@@ -30,6 +30,8 @@ class GameLogic():
         self.current_turn = random.randint(0, len(self.users) - 1)
 
     def check_valid_move(self, position:tuple[int, int]) -> bool:
+        if position is None:
+            return False
         x, y = position
 
         if x < 0 or y < 0 or x >= self.grid_x or y >= self.grid_y:
@@ -82,6 +84,8 @@ class GameLogic():
             raise KeyError(f"Bot {bot_name} not found.")
 
         bot = self.bots[bot_name]
+        if bot is None:
+            return None
         self.game_state.current_player = self.current_turn
 
         if hasattr(bot, "move"):

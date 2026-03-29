@@ -25,6 +25,10 @@ python main.py
 
 The game loads the trained model from `weights/best.pt` if present; otherwise the bot uses an untrained (random-initialized) network.
 
+Play against a specific agent type, board size, and weight file.
+```bash
+python main.py --board_size 9 --agent_type alphazero-resnet --weights weights/checkpoint_165.pt
+```
 ## Training (no UI)
 
 Training uses self-play plus optional games against a heuristic tactical bot and past checkpoints (league). Run from the project root:
@@ -155,6 +159,9 @@ uv run python train.py --board_size 9 --agent_type alphazero-resnet --amp --num_
 
 AlphaZero on RTX Quadro 6000
 uv run python train.py --board_size 9 --agent_type alphazero-resnet --amp --num_workers 20 --worker_device cuda --mcts_batch_size 128 --batch_size 1024 --iterations 300 --games_per_iteration 400 --eval_games 200 --learning_rate 5e-4 --num_simulations 2000 --value_coef 1.0 --c_puct 1.5 --self_play_temp 1.0 --temp_moves 12 --league_prob 0.2 --heuristic_prob 0.15 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_55.pt
+
+uv run python train.py --device cuda --board_size 9 --agent_type alphazero-resnet --amp --num_workers 12 --worker_device cpu --mcts_batch_size 64 --batch_size 1024 --iterations 300 --games_per_iteration 400 --eval_games 100 --learning_rate 5e-4 --num_simulations 800 --value_coef 1.0 --c_puct 1.5 --self_play_temp 1.0 --temp_moves 12 --league_prob 0.2 --heuristic_prob 0.15 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 100 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_115.pt
+
 
 DQN:
 Initial:

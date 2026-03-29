@@ -11,6 +11,7 @@ class Window():
         current_scene: str = "game",
         weights_path: str | None = None,
         board_size: int = 15,
+        agent_type: str | None = None,
     ):
         pygame.init()
         self.running = True
@@ -37,6 +38,7 @@ class Window():
                 self.scene_manager,
                 weights_path=weights_path,
                 board_size=board_size,
+                agent_type=agent_type,
             )
         }
 
