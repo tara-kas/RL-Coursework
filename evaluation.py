@@ -1,6 +1,6 @@
 """
 Standalone evaluation: run N games with a model as player 0 vs an opponent (player 1).
-Opponents: random, heuristic, alphazero.
+Opponents: random, heuristic, DQN, or AlphaZero variants.
 """
 import argparse
 import random
@@ -16,9 +16,62 @@ from src.gomoku_game import (
     get_legal_moves,
 )
 from src.Bots.dqn import DQN, select_action as dqn_select_action
-from src.Bots.alpha_zero_transform import Bot as AlphaZeroBot
+from src.Bots.alpha_zero_resnet import Bot as AlphaZeroResNetBot
+from src.Bots.alpha_zero_transformer import Bot as AlphaZeroTransformerBot
+from src.Bots.alpha_zero_hybrid import Bot as AlphaZeroHybridBot
 from src.Bots.heuristic_tactical import predict as heuristic_predict
 from src.model_loader import load_weights
+
+
+def _build_agent_move_fn(
+    agent_type: str,
+    weights_path: str,
+    board_size: int,
+    device: torch.device,
+    num_simulations: int,
+    use_amp: bool,
+):
+    if agent_type == "dqn":
+        model = DQN(board_size=board_size).to(device)
+        load_weights(model, weights_path, device)
+        model.eval()
+
+        def get_move(board: np.ndarray, current_player: int):
+            _, move = dqn_select_action(
+                model,
+                board,
+                current_player,
+                board_size,
+                device,
+                epsilon=0.0,
+                use_amp=use_amp,
+            )
+            return move
+
+        return get_move
+
+    bot_cls_map = {
+        "alphazero": AlphaZeroResNetBot,
+        "alphazero-resnet": AlphaZeroResNetBot,
+        "alphazero-transformer": AlphaZeroTransformerBot,
+        "hybrid": AlphaZeroHybridBot,
+        "alphazero-hybrid": AlphaZeroHybridBot,
+    }
+    if agent_type not in bot_cls_map:
+        raise ValueError(f"Unsupported agent_type: {agent_type}")
+
+    bot = bot_cls_map[agent_type](
+        weights_path=weights_path,
+        board_size=board_size,
+        device=device,
+        num_simulations=num_simulations,
+        use_amp=use_amp,
+    )
+
+    def get_move(board: np.ndarray, current_player: int):
+        return bot.predict(board, current_player=current_player)
+
+    return get_move
 
 
 def run_games(
@@ -77,7 +130,7 @@ def run_games(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Evaluate a DQN or AlphaZero model vs random, heuristic, or AlphaZero."
+        description="Evaluate DQN or AlphaZero variants vs random, heuristic, DQN, or AlphaZero variants."
     )
     parser.add_argument(
         "--model",
@@ -88,14 +141,30 @@ def main() -> None:
     parser.add_argument(
         "--agent_type",
         type=str,
-        choices=("dqn", "alphazero"),
+        choices=(
+            "dqn",
+            "alphazero",
+            "alphazero-resnet",
+            "alphazero-transformer",
+            "hybrid",
+            "alphazero-hybrid",
+        ),
         default="dqn",
         help="Type of the model to evaluate (player 0)",
     )
     parser.add_argument(
         "--opponent",
         type=str,
-        choices=("random", "heuristic", "alphazero"),
+        choices=(
+            "random",
+            "heuristic",
+            "dqn",
+            "alphazero",
+            "alphazero-resnet",
+            "alphazero-transformer",
+            "hybrid",
+            "alphazero-hybrid",
+        ),
         required=True,
         help="Opponent to play against (player 1)",
     )
@@ -115,7 +184,7 @@ def main() -> None:
         "--opponent_weights",
         type=str,
         default=None,
-        help="Path to AlphaZero weights when --opponent alphazero (required then)",
+        help="Path to opponent weights when --opponent is a learned agent (required then)",
     )
     parser.add_argument(
         "--device",
@@ -132,7 +201,7 @@ def main() -> None:
         "--num_simulations",
         type=int,
         default=50,
-        help="MCTS simulations per move when model or opponent is AlphaZero",
+        help="MCTS simulations per move when model or opponent is an AlphaZero variant",
     )
     parser.add_argument(
         "--seed",
@@ -151,37 +220,26 @@ def main() -> None:
         args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    if args.opponent == "alphazero" and not args.opponent_weights:
-        parser.error("--opponent alphazero requires --opponent_weights")
+    learned_opponents = {
+        "dqn",
+        "alphazero",
+        "alphazero-resnet",
+        "alphazero-transformer",
+        "hybrid",
+        "alphazero-hybrid",
+    }
+    if args.opponent in learned_opponents and not args.opponent_weights:
+        parser.error(f"--opponent {args.opponent} requires --opponent_weights")
 
     # Player 0: model under evaluation
-    if args.agent_type == "dqn":
-        model_p0 = DQN(board_size=args.board_size).to(device)
-        load_weights(model_p0, args.model, device)
-        model_p0.eval()
-
-        def get_move_p0(board: np.ndarray, current_player: int):
-            _, move = dqn_select_action(
-                model_p0,
-                board,
-                current_player,
-                args.board_size,
-                device,
-                epsilon=0.0,
-                use_amp=args.amp,
-            )
-            return move
-    else:
-        bot_p0 = AlphaZeroBot(
-            weights_path=args.model,
-            board_size=args.board_size,
-            device=device,
-            num_simulations=args.num_simulations,
-            use_amp=args.amp,
-        )
-
-        def get_move_p0(board: np.ndarray, current_player: int):
-            return bot_p0.predict(board, current_player=current_player)
+    get_move_p0 = _build_agent_move_fn(
+        agent_type=args.agent_type,
+        weights_path=args.model,
+        board_size=args.board_size,
+        device=device,
+        num_simulations=args.num_simulations,
+        use_amp=args.amp,
+    )
 
     # Player 1: opponent
     if args.opponent == "random":
@@ -192,7 +250,8 @@ def main() -> None:
         def get_move_p1(board: np.ndarray, current_player: int):
             return heuristic_predict(board.copy(), current_player)
     else:
-        bot_p1 = AlphaZeroBot(
+        get_move_p1 = _build_agent_move_fn(
+            agent_type=args.opponent,
             weights_path=args.opponent_weights,
             board_size=args.board_size,
             device=device,
@@ -200,12 +259,9 @@ def main() -> None:
             use_amp=args.amp,
         )
 
-        def get_move_p1(board: np.ndarray, current_player: int):
-            return bot_p1.predict(board, current_player=current_player)
-
     print(
         f"Evaluating {args.agent_type} ({args.model}) vs {args.opponent}"
-        + (f" ({args.opponent_weights})" if args.opponent == "alphazero" else "")
+        + (f" ({args.opponent_weights})" if args.opponent in learned_opponents else "")
         + f" over {args.num_games} games (board_size={args.board_size})..."
     )
     result = run_games(
