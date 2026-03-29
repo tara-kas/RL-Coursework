@@ -13,6 +13,9 @@ from typing import Callable
 import numpy as np
 import torch
 
+import torch.multiprocessing as mp
+mp.set_sharing_strategy('file_system')
+
 from src.gomoku_game import (
     GAME_NOT_OVER,
     WIN,
@@ -22,7 +25,7 @@ from src.gomoku_game import (
     get_legal_moves,
 )
 from src.gomoku_utils import preprocess_board
-from src.Bots.alpha_zero_transform import AlphaZeroTransform, Bot as AlphaZeroBot
+from src.Bots.alpha_zero_resnet import AlphaZeroTransform, Bot as AlphaZeroBot
 from src.Bots.alpha_zero_hybrid import AlphaZeroHybrid, Bot as HybridBot
 from src.Bots.heuristic_tactical import predict as heuristic_predict
 from src.Bots.dqn import (
@@ -108,52 +111,89 @@ def self_play(
         current_player = 0
         game_history: list[tuple[np.ndarray, int, np.ndarray]] = []
 
+        import mcts_cpp
+        game_tree = mcts_cpp.MCTS()
+        last_move = None
+
+        consecutive_bad_evals = 0
+        resign_threshold = -0.95
+
         while True:
             if opponent is None or current_player == 0:
                 temp = self_play_temp if len(game_history) < temp_moves else 0.0
-                move, policy = bot.get_move_and_policy(
+                
+                # 25% chance of a Deep Search, 75% chance of a Fast Search (e.g. 25 sims)
+                if opponent is None and random.random() < 0.25:
+                    current_sims = bot.num_simulations
+                else:
+                    # Fast search (minimum 25, or 1/8th of full simulations)
+                    current_sims = max(25, bot.num_simulations // 8)
+
+                # Get the move, policy, and network's confidence
+                move, policy, root_value = bot.get_move_and_policy(
                     board.copy(),
                     current_player,
+                    tree=game_tree,
+                    last_move=last_move,
                     c_puct=c_puct,
                     temperature=temp,
-                    add_root_noise=add_root_noise,
-                    dirichlet_alpha=root_dirichlet_alpha,
-                    dirichlet_epsilon=root_dirichlet_epsilon,
+                    override_simulations=current_sims # Pass the playout cap
                 )
+                
+                if opponent is None: # Only resign during pure self-play
+                    if root_value < resign_threshold:
+                        consecutive_bad_evals += 1
+                    else:
+                        consecutive_bad_evals = 0
+                        
+                    # If we've been doomed for 3 turns in a row, resign to save CPU time!
+                    if consecutive_bad_evals >= 3:
+                        # Force a loss for the current player
+                        result = WIN 
+                        current_player = 1 - current_player # Award win to opponent
+                        break # Exit the while loop immediately
+
                 if opponent is None:
                     game_history.append((board.copy(), current_player, policy))
                 else:
                     game_history.append((board.copy(), 0, policy))
             else:
+                # Opponent logic (Heuristic/Random bot) stays the same
                 if hasattr(opponent, "predict"):
                     move = opponent.predict(board.copy(), current_player)
                 else:
                     move = opponent(board.copy(), current_player)
 
+            last_move = move
             board = apply_move(board, move, current_player)
             result = get_game_result(board, move, current_player)
 
             if result != GAME_NOT_OVER:
-                if result == WIN:
-                    winner = current_player
-                else:
-                    winner = -1
-                if winner == 0:
-                    stats["wins"] += 1
-                elif winner == 1:
-                    stats["losses"] += 1
-                else:
-                    stats["draws"] += 1
-                if opponent is not None:
-                    z = 1.0 if winner == 0 else (-1.0 if winner == 1 else 0.0)
-                    for b, _p, pi in game_history:
-                        buffer.append((b, 0, pi, z))
-                else:
-                    for b, p, pi in game_history:
-                        z = 0.0 if winner == -1 else (1.0 if p == winner else -1.0)
-                        buffer.append((b, p, pi, z))
                 break
+                
             current_player = 1 - current_player
+
+        if result == WIN:
+            winner = current_player
+        elif result == DRAW:
+            winner = -1
+        else:
+            winner = 1 - current_player
+
+        if winner == 0:
+            stats["wins"] += 1
+        elif winner == 1:
+            stats["losses"] += 1
+        else:
+            stats["draws"] += 1
+
+        # Populate the buffer with the game history
+        for hist_board, hist_player, hist_policy in game_history:
+            if winner == -1:
+                z = 0.0
+            else:
+                z = 1.0 if hist_player == winner else -1.0
+            buffer.append((hist_board, hist_player, hist_policy, z))
 
     return buffer, stats
 
@@ -188,9 +228,17 @@ def _worker_self_play(
         np.random.seed(seed_base + worker_id)
         torch.manual_seed(seed_base + worker_id)
 
+    torch.set_float32_matmul_precision("high")
+
     device = torch.device(device_str)
     model = AlphaZeroTransform(board_size=board_size).to(device)
-    model.load_state_dict(state_dict, strict=True)
+
+    clean_state_dict = {}
+    for k, v in state_dict.items():
+        # Strip the PyTorch 2.0 compilation prefix if it exists
+        clean_key = k.replace("_orig_mod.", "") if k.startswith("_orig_mod.") else k
+        clean_state_dict[clean_key] = v
+    model.load_state_dict(clean_state_dict, strict=True)
     model.eval()
 
     bot = AlphaZeroBot(
@@ -259,14 +307,20 @@ def train_step(
         legal_mask = (board == -1).astype(np.float32).flatten()
         masks_list.append(legal_mask)
 
-    states = torch.tensor(np.stack(states_list), dtype=torch.float32, device=device)
-    policy_targets = torch.tensor(
-        np.stack(policy_targets_list), dtype=torch.float32, device=device
-    )
-    value_targets = torch.tensor(
-        np.stack(value_targets_list), dtype=torch.float32, device=device
-    ).unsqueeze(1)
-    masks = torch.tensor(np.stack(masks_list), dtype=torch.float32, device=device)
+    states_np = np.stack(states_list).astype(np.float32)
+    policy_np = np.stack(policy_targets_list).astype(np.float32)
+    value_np = np.array(value_targets_list, dtype=np.float32)
+    masks_np = np.stack(masks_list).astype(np.float32)
+
+    states_np, policy_np = _augment_symmetries(states_np, policy_np, board_size)
+    
+    value_np = np.repeat(value_np, 8)
+    masks_np = np.repeat(masks_np, 8, axis=0)
+
+    states = torch.tensor(states_np, dtype=torch.float32, device=device)
+    policy_targets = torch.tensor(policy_np, dtype=torch.float32, device=device)
+    value_targets = torch.tensor(value_np, dtype=torch.float32, device=device).unsqueeze(1)
+    masks = torch.tensor(masks_np, dtype=torch.float32, device=device)
 
     policy_pred, value_pred = model(states, masks)
 
@@ -491,6 +545,7 @@ def main() -> None:
     parser.add_argument("--heuristic_prob_decay_iters", type=int, default=None, help="DQN: iterations over which to decay heuristic_prob_start to heuristic_prob")
     args = parser.parse_args()
 
+
     if args.seed is not None:
         random.seed(args.seed)
         np.random.seed(args.seed)
@@ -641,7 +696,10 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                         args.root_dirichlet_epsilon,
                     )
                 )
-            with multiprocessing.Pool(args.num_workers) as pool:
+            #with multiprocessing.Pool(args.num_workers) as pool:
+            #    results = pool.starmap(_worker_self_play, worker_args)
+
+            with mp.Pool(args.num_workers) as pool:
                 results = pool.starmap(_worker_self_play, worker_args)
             new_data = [item for data, _stats in results for item in data]
             self_play_stats = {
@@ -1090,4 +1148,5 @@ def _run_dqn_training(args: argparse.Namespace, device: torch.device) -> None:
 
 
 if __name__ == "__main__":
+    mp.set_start_method('spawn', force=True)
     main()

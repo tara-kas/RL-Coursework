@@ -12,6 +12,91 @@ from src.gomoku_game import get_legal_moves
 from src.mcts import run_mcts, run_mcts_with_policy
 from src.model_loader import DEFAULT_WEIGHTS_PATH, load_weights, save_weights as save_weights_to_path
 
+import mcts_cpp
+
+def run_fast_mcts_with_policy(
+    tree,                  # <--- NEW: Accept the tree object
+    board: np.ndarray,
+    current_player: int,
+    model: torch.nn.Module,
+    last_move: tuple[int, int] | None = None, # <--- NEW: Accept the last move
+    num_simulations: int = 200,
+    batch_size: int = 64,
+    c_puct: float = 1.5,
+    device: torch.device = torch.device("cuda")
+) -> tuple[tuple[int, int], np.ndarray, float]:
+    
+    if last_move is None:
+        # Very first turn of the game
+        tree.setRootState(board.astype(np.float32), current_player)
+    else:
+        # Convert 2D move to 1D move for C++
+        move_1d = last_move[0] * 15 + last_move[1]
+        tree.changeRoot(move_1d, board.astype(np.float32), current_player)
+
+    sims_completed = 0
+    while sims_completed < num_simulations:
+        
+        # --- PING (Gather from C++) ---
+        batch_boards = tree.gather_batch(batch_size, c_puct)
+        actual_batch = batch_boards.shape[0]
+        
+        if actual_batch == 0:
+            # All paths hit game-over states!
+            sims_completed += batch_size
+            continue
+
+        # --- PREPROCESS FOR RESNET ---
+        # Convert raw (B, 15, 15) array to PyTorch tensor
+        batch_tensor = torch.from_numpy(batch_boards).to(device)
+        
+        # Build the 3 planes: [Current Player Pieces, Opponent Pieces, Color to Play]
+        # 1. Pre-allocate the memory exactly ONCE
+        planes = torch.empty((actual_batch, 3, 15, 15), dtype=torch.float32, device=device)
+        
+        # 2. Fill the memory in-place (drastically reduces GPU overhead)
+        planes[:, 0, :, :] = (batch_tensor == current_player).float()
+        planes[:, 1, :, :] = (batch_tensor == (1 - current_player)).float()
+        planes[:, 2, :, :] = float(current_player)
+        
+        # 3. Create the mask directly
+        mask = (batch_tensor.view(actual_batch, 225) == -1).float()
+        
+        # Build the legal move mask (batch_size, 225) -> 1 is legal, 0 is illegal
+        # -1 represents an empty square in your game logic
+        mask = (batch_tensor.view(actual_batch, 225) == -1).float()
+
+        # --- THE NET (Predict on GPU) ---
+        with torch.inference_mode():
+            policy, value = model(planes, mask)
+            
+            # Move back to CPU for C++
+            policy_np = policy.cpu().numpy()
+            value_np = value.view(-1).cpu().numpy()
+
+        # --- PONG (Send back to C++) ---
+        tree.expand_backup(policy_np, value_np)
+        
+        sims_completed += actual_batch
+
+    # --- EXTRACT RESULTS ---
+    # Get the visit counts from C++
+    visits_1d = np.array(tree.get_root_visits(), dtype=np.float32)
+    
+    # Calculate Policy Target (pi)
+    total_visits = visits_1d.sum()
+    if total_visits == 0: 
+        total_visits = 1
+    policy_target = visits_1d / total_visits
+
+    # Pick the best move (highest visit count)
+    best_move_idx = int(np.argmax(visits_1d))
+    best_move_2d = (best_move_idx // 15, best_move_idx % 15)
+
+    root_value = tree.get_root_value()
+
+    return best_move_2d, policy_target, root_value
+
 
 def _maybe_compile(model: nn.Module, enable: bool = True) -> nn.Module:
     """Compile model with torch.compile if PyTorch >= 2 and enable is True. First run may be slow (tracing)."""
@@ -149,44 +234,50 @@ class Bot(BaseBot):
             n0 = int(np.sum(board_state == 0))
             n1 = int(np.sum(board_state == 1))
             current_player = 0 if n0 == n1 else 1
-        move = run_mcts(
+
+        import mcts_cpp
+        temp_tree = mcts_cpp.MCTS()
+
+        best_move, _ = run_fast_mcts_with_policy(
+            temp_tree,
             board_state.copy(),
             current_player,
             self.model,
-            self.board_size,
             num_simulations=self.num_simulations,
             batch_size=self.mcts_batch_size,
             c_puct=1.5,
-            device=self.device,
-            use_amp=self.use_amp,
+            device=self.device
         )
-        return move
+        
+        return best_move
 
     def get_move_and_policy(
         self,
         board: np.ndarray,
         current_player: int,
+        tree=None,
+        last_move=None,
         c_puct: float = 1.5,
         temperature: float = 0.0,
         add_root_noise: bool = False,
         dirichlet_alpha: float = 0.3,
         dirichlet_epsilon: float = 0.25,
+        override_simulations: int | None = None,
     ) -> tuple[tuple[int, int], np.ndarray]:
-        return run_mcts_with_policy(
-            board,
-            current_player,
-            self.model,
-            self.board_size,
-            num_simulations=self.num_simulations,
+        sims_to_run = override_simulations if override_simulations is not None else self.num_simulations
+        best_move, policy, root_value = run_fast_mcts_with_policy(
+            tree=tree,
+            board=board.copy(),
+            current_player=current_player,
+            model=self.model,
+            last_move=last_move,
+            num_simulations=sims_to_run,
             batch_size=self.mcts_batch_size,
             c_puct=c_puct,
-            device=self.device,
-            temperature=temperature,
-            use_amp=self.use_amp,
-            add_root_noise=add_root_noise,
-            dirichlet_alpha=dirichlet_alpha,
-            dirichlet_epsilon=dirichlet_epsilon,
+            device=self.device
         )
+        
+        return best_move, policy, root_value
 
     def move(self, game_state: GameState) -> tuple[int, int] | None:
         legal_moves = get_legal_moves(game_state.board)
@@ -195,17 +286,22 @@ class Bot(BaseBot):
 
         current_player = game_state.current_player if game_state.current_player is not None else 0
 
-        return run_mcts(
-            game_state.board.copy(),
-            current_player,
-            self.model,
-            self.board_size,
+        import mcts_cpp
+        temp_tree = mcts_cpp.MCTS()
+        
+        best_move, _, _ = run_fast_mcts_with_policy(
+            tree=temp_tree,
+            board=game_state.board.copy(),
+            current_player=current_player,
+            model=self.model,
             num_simulations=self.num_simulations,
             batch_size=self.mcts_batch_size,
             c_puct=1.5,
-            device=self.device,
-            use_amp=self.use_amp,
+            device=self.device
         )
+
+        
+        return best_move
 
 
 def predict(
