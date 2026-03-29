@@ -447,11 +447,17 @@ def evaluate_alphazero(
 
 def main() -> None:
     # Set the start method to 'spawn' at the very beginning of main
-    try:
-        mp.set_start_method('spawn', force=True)
-    except RuntimeError:
-        # Method might already be set
-        pass
+    if "--num_workers" in sys.argv:
+        try:
+            # Get the index of num_workers and check its value
+            idx = sys.argv.index("--num_workers")
+            if int(sys.argv[idx + 1]) > 1:
+                mp.set_start_method('spawn', force=True)
+                # Recommended: Also use the file_system sharing strategy 
+                # to prevent the "Too many open files" error
+                mp.set_sharing_strategy('file_system')
+        except (ValueError, IndexError, RuntimeError):
+            pass
     
     parser = argparse.ArgumentParser(description="Gomoku self-play training (AlphaZero, Hybrid, or DQN)")
     parser.add_argument(
