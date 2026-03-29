@@ -14,6 +14,7 @@ import torch.multiprocessing as mp
 import numpy as np
 import torch
 
+from src.alphazero_buffer import AlphaZeroReplayBuffer, SelfPlayData
 from src.gomoku_game import (
     GAME_NOT_OVER,
     WIN,
@@ -42,6 +43,7 @@ from src.Bots.dqn import (
     evaluate_dqn,
 )
 from src.model_loader import save_weights as save_model_weights, load_weights
+from src.mcts import MCTSNode
 
 
 def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
@@ -97,16 +99,19 @@ def self_play(
     add_root_noise: bool = True,
     root_dirichlet_alpha: float = 0.3,
     root_dirichlet_epsilon: float = 0.25,
-) -> tuple[list[tuple[np.ndarray, int, np.ndarray, float]], dict[str, int]]:
+) -> tuple[SelfPlayData, dict[str, int]]:
     """
     Run num_games. Each game is self-play, league (vs league_bot), or heuristic (vs tactical bot)
     with probabilities (1 - league_prob - heuristic_prob), league_prob, heuristic_prob.
     Returns:
-      - list of (board, current_player, policy, z)
+      - compact arrays of (board, current_player, policy, z)
       - stats dict with wins/losses/draws and game type counts for player 0
     """
     bot.model.eval()
-    buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
+    boards_buffer: list[np.ndarray] = []
+    players_buffer: list[int] = []
+    policies_buffer: list[np.ndarray] = []
+    values_buffer: list[float] = []
     stats = {
         "wins": 0,
         "losses": 0,
@@ -130,21 +135,24 @@ def self_play(
             opponent = None
             stats["games_self_play"] += 1
 
-        board = np.full((board_size, board_size), -1, dtype=np.int32)
+        board = np.full((board_size, board_size), -1, dtype=np.int8)
         current_player = 0
         game_history: list[tuple[np.ndarray, int, np.ndarray]] = []
+        shared_root: MCTSNode | None = None
 
         while True:
             if opponent is None or current_player == 0:
                 temp = self_play_temp if len(game_history) < temp_moves else 0.0
-                move, policy = bot.get_move_and_policy(
-                    board.copy(),
+                move, policy, shared_root = bot.get_move_and_policy(
+                    board,
                     current_player,
                     c_puct=c_puct,
                     temperature=temp,
                     add_root_noise=add_root_noise,
                     dirichlet_alpha=root_dirichlet_alpha,
                     dirichlet_epsilon=root_dirichlet_epsilon,
+                    root=shared_root,
+                    return_root=True,
                 )
                 if opponent is None:
                     game_history.append((board.copy(), current_player, policy))
@@ -157,6 +165,22 @@ def self_play(
                     move = opponent(board.copy(), current_player)
 
             board = apply_move(board, move, current_player)
+            if shared_root is not None:
+                if shared_root.last_move == move:
+                    shared_root.parent = None
+                elif (
+                    shared_root.is_expanded()
+                    and shared_root.legal_moves_idx is not None
+                    and shared_root.children is not None
+                ):
+                    move_idx = move[0] * board_size + move[1]
+                    matches = np.flatnonzero(shared_root.legal_moves_idx == move_idx)
+                    if len(matches) > 0:
+                        shared_root = shared_root.children[int(matches[0])]
+                        if shared_root is not None:
+                            shared_root.parent = None
+                    else:
+                        shared_root = None
             result = get_game_result(board, move, current_player)
 
             if result != GAME_NOT_OVER:
@@ -173,15 +197,30 @@ def self_play(
                 if opponent is not None:
                     z = 1.0 if winner == 0 else (-1.0 if winner == 1 else 0.0)
                     for b, _p, pi in game_history:
-                        buffer.append((b, 0, pi, z))
+                        boards_buffer.append(b)
+                        players_buffer.append(0)
+                        policies_buffer.append(pi.astype(np.float16, copy=False))
+                        values_buffer.append(z)
                 else:
                     for b, p, pi in game_history:
                         z = 0.0 if winner == -1 else (1.0 if p == winner else -1.0)
-                        buffer.append((b, p, pi, z))
+                        boards_buffer.append(b)
+                        players_buffer.append(p)
+                        policies_buffer.append(pi.astype(np.float16, copy=False))
+                        values_buffer.append(z)
                 break
             current_player = 1 - current_player
 
-    return buffer, stats
+    if boards_buffer:
+        data = SelfPlayData(
+            boards=np.stack(boards_buffer).astype(np.int8, copy=False),
+            players=np.asarray(players_buffer, dtype=np.uint8),
+            policies=np.stack(policies_buffer).astype(np.float16, copy=False),
+            values=np.asarray(values_buffer, dtype=np.float16),
+        )
+    else:
+        data = SelfPlayData.empty(board_size)
+    return data, stats
 
 
 def _worker_self_play(
@@ -205,7 +244,7 @@ def _worker_self_play(
     add_root_noise: bool,
     root_dirichlet_alpha: float,
     root_dirichlet_epsilon: float,
-) -> tuple[list[tuple[np.ndarray, int, np.ndarray, float]], dict[str, int]]:
+) -> tuple[SelfPlayData, dict[str, int]]:
     """
     Worker for parallel self-play. Loads model from state_dict, runs num_games, returns buffer.
     Must be top-level for pickling in multiprocessing.
@@ -264,7 +303,7 @@ def _worker_self_play(
 
 
 def train_step(
-    batch: list[tuple[np.ndarray, int, np.ndarray, float]],
+    batch: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     board_size: int,
@@ -273,28 +312,17 @@ def train_step(
 ) -> tuple[float, float]:
     """One training step on a batch. Returns (policy_loss, value_loss)."""
     model.train()
+    boards, players, policies, values = batch
+    batch_size = boards.shape[0]
+    states_np = np.empty((batch_size, 3, board_size, board_size), dtype=np.float32)
+    for idx, (board, current_player) in enumerate(zip(boards, players, strict=False)):
+        states_np[idx] = preprocess_board(board, int(current_player))
+    masks_np = (boards.reshape(batch_size, -1) == -1).astype(np.float32, copy=False)
 
-    states_list = []
-    policy_targets_list = []
-    value_targets_list = []
-    masks_list = []
-
-    for board, current_player, policy, z in batch:
-        planes = preprocess_board(board, current_player)
-        states_list.append(planes)
-        policy_targets_list.append(policy)
-        value_targets_list.append(z)
-        legal_mask = (board == -1).astype(np.float32).flatten()
-        masks_list.append(legal_mask)
-
-    states = torch.tensor(np.stack(states_list), dtype=torch.float32, device=device)
-    policy_targets = torch.tensor(
-        np.stack(policy_targets_list), dtype=torch.float32, device=device
-    )
-    value_targets = torch.tensor(
-        np.stack(value_targets_list), dtype=torch.float32, device=device
-    ).unsqueeze(1)
-    masks = torch.tensor(np.stack(masks_list), dtype=torch.float32, device=device)
+    states = torch.from_numpy(states_np).to(device=device)
+    policy_targets = torch.from_numpy(policies.astype(np.float32, copy=False)).to(device=device)
+    value_targets = torch.from_numpy(values.astype(np.float32, copy=False)).to(device=device).unsqueeze(1)
+    masks = torch.from_numpy(masks_np).to(device=device)
 
     policy_pred, value_pred = model(states, masks)
 
@@ -307,7 +335,7 @@ def train_step(
     value_loss = torch.nn.functional.mse_loss(value_pred, value_targets)
 
     loss = policy_loss + value_coef * value_loss
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
@@ -338,7 +366,7 @@ def _augment_symmetries(
 
 
 def train_step_hybrid(
-    batch: list[tuple[np.ndarray, int, np.ndarray, float]],
+    batch: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
@@ -350,41 +378,35 @@ def train_step_hybrid(
     """One hybrid training step with 8-fold augmentation and grad clipping."""
     model.train()
 
+    boards, players, policies, values = batch
     states_list = []
-    policy_targets_list = []
-    value_targets_list = []
-    masks_list = []
 
-    for board, current_player, policy, z in batch:
-        base = preprocess_board(board, current_player)
+    for board, current_player in zip(boards, players, strict=False):
+        base = preprocess_board(board, int(current_player))
         color_plane = np.ones_like(base[0], dtype=np.float32)
         planes = np.stack([base[0], base[1], color_plane], axis=0)
         states_list.append(planes)
-        policy_targets_list.append(policy)
-        value_targets_list.append(z)
-        legal_mask = (board == -1).astype(np.float32).flatten()
-        masks_list.append(legal_mask)
 
     states_np = np.stack(states_list).astype(np.float32)
-    policy_np = np.stack(policy_targets_list).astype(np.float32)
-    value_np = np.array(value_targets_list, dtype=np.float32)
-    masks_np = np.stack(masks_list).astype(np.float32)
+    policy_np = policies.astype(np.float32, copy=False)
+    value_np = values.astype(np.float32, copy=False)
+    masks_np = (boards.reshape(boards.shape[0], -1) == -1).astype(np.float32, copy=False)
 
     states_np, policy_np = _augment_symmetries(states_np, policy_np, board_size)
     value_np = np.repeat(value_np, 8)
     masks_np = np.repeat(masks_np, 8, axis=0)
 
-    states = torch.tensor(states_np, dtype=torch.float32, device=device)
-    policy_targets = torch.tensor(policy_np, dtype=torch.float32, device=device)
-    value_targets = torch.tensor(value_np, dtype=torch.float32, device=device).unsqueeze(1)
-    masks = torch.tensor(masks_np, dtype=torch.float32, device=device)
+    states = torch.from_numpy(states_np).to(device=device)
+    policy_targets = torch.from_numpy(policy_np).to(device=device)
+    value_targets = torch.from_numpy(value_np).to(device=device).unsqueeze(1)
+    masks = torch.from_numpy(masks_np).to(device=device)
 
     policy_pred, value_pred = model(states, masks)
     policy_loss = -(policy_targets * torch.log(policy_pred + 1e-9)).sum(dim=1).mean()
     value_loss = torch.nn.functional.mse_loss(value_pred, value_targets)
 
     loss = policy_loss + value_coef * value_loss
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_norm)
     optimizer.step()
@@ -408,7 +430,7 @@ def evaluate_alphazero(
     draws = 0
 
     for _ in range(num_games):
-        board = np.full((board_size, board_size), -1, dtype=np.int32)
+        board = np.full((board_size, board_size), -1, dtype=np.int8)
         current_player = 0
         while True:
             if current_player == 0:
@@ -593,8 +615,10 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
     )
     optimizer = torch.optim.Adam(bot.model.parameters(), lr=args.learning_rate)
 
-    buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
-    buffer_max_size = args.games_per_iteration * 200  # rough upper bound positions per game
+    replay_buffer = AlphaZeroReplayBuffer(
+        capacity=args.games_per_iteration * 200,
+        board_size=args.board_size,
+    )
     best_loss = float("inf")
     best_heuristic_wr = -1.0
     total_iterations = args.iterations
@@ -694,7 +718,6 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                 )
             with multiprocessing.Pool(args.num_workers) as pool:
                 results = pool.starmap(_worker_self_play, worker_args)
-            new_data = [item for data, _stats in results for item in data]
             self_play_stats = {
                 "wins": sum(s["wins"] for _d, s in results),
                 "losses": sum(s["losses"] for _d, s in results),
@@ -707,7 +730,11 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
 
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
-        buffer.extend(new_data)
+        if args.num_workers <= 1:
+            replay_buffer.extend(new_data)
+        else:
+            for data, _stats in results:
+                replay_buffer.extend(data)
         total_games = (
             self_play_stats["wins"] + self_play_stats["losses"] + self_play_stats["draws"]
         )
@@ -717,23 +744,25 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
             f"heuristic={self_play_stats['games_heuristic']} "
             f"self_play={self_play_stats['games_self_play']}"
         )
-        if len(buffer) > buffer_max_size:
-            buffer = buffer[-buffer_max_size:]
-
         # Train for several epochs on current buffer
-        random.shuffle(buffer)
         total_pl = 0.0
         total_vl = 0.0
         n_batches = 0
-        batches_per_epoch = max(1, len(buffer) // args.batch_size)
+        batches_per_epoch = max(1, math.ceil(len(replay_buffer) / args.batch_size))
         for epoch in range(args.train_epochs):
-            for start in range(0, len(buffer), args.batch_size):
-                batch = buffer[start : start + args.batch_size]
-                if len(batch) < 2:
+            shuffled_indices = replay_buffer.shuffled_indices()
+            for batch_number, start in enumerate(range(0, len(replay_buffer), args.batch_size)):
+                batch_indices = shuffled_indices[start : start + args.batch_size]
+                if len(batch_indices) < 2:
                     continue
-                log_train(epoch, args.train_epochs, start // args.batch_size, batches_per_epoch)
+                log_train(epoch, args.train_epochs, batch_number, batches_per_epoch)
                 pl, vl = train_step(
-                    batch, bot.model, optimizer, args.board_size, device, args.value_coef
+                    replay_buffer.get_batch(batch_indices),
+                    bot.model,
+                    optimizer,
+                    args.board_size,
+                    device,
+                    args.value_coef,
                 )
                 total_pl += pl
                 total_vl += vl
@@ -746,7 +775,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
             avg_vl = total_vl / n_batches
             avg_loss = avg_pl + args.value_coef * avg_vl
             print(
-                f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} buffer={len(buffer)} "
+                f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} buffer={len(replay_buffer)} "
                 f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
             )
             if args.az_best_by == "loss" and avg_loss < best_loss:
@@ -755,7 +784,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                 print(f"  -> saved best (by loss) to {args.save_best_path}")
         else:
             print(
-                f"  Buffer size {len(buffer)} too small; skipping train  "
+                f"  Buffer size {len(replay_buffer)} too small; skipping train  "
                 f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
             )
 
@@ -843,8 +872,10 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
         eta_min=args.hybrid_lr_min,
     )
 
-    buffer: list[tuple[np.ndarray, int, np.ndarray, float]] = []
-    buffer_max_size = args.games_per_iteration * 200
+    replay_buffer = AlphaZeroReplayBuffer(
+        capacity=args.games_per_iteration * 200,
+        board_size=args.board_size,
+    )
     best_loss = float("inf")
     best_heuristic_wr = -1.0
     total_iterations = args.iterations
@@ -894,21 +925,18 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
         )
         sys.stdout.write("\r" + " " * 80 + "\r")
         sys.stdout.flush()
-        buffer.extend(new_data)
-        if len(buffer) > buffer_max_size:
-            buffer = buffer[-buffer_max_size:]
-
-        random.shuffle(buffer)
+        replay_buffer.extend(new_data)
         total_pl = 0.0
         total_vl = 0.0
         n_batches = 0
         for _epoch in range(args.train_epochs):
-            for start in range(0, len(buffer), args.batch_size):
-                batch = buffer[start : start + args.batch_size]
-                if len(batch) < 2:
+            shuffled_indices = replay_buffer.shuffled_indices()
+            for start in range(0, len(replay_buffer), args.batch_size):
+                batch_indices = shuffled_indices[start : start + args.batch_size]
+                if len(batch_indices) < 2:
                     continue
                 pl, vl = train_step_hybrid(
-                    batch=batch,
+                    batch=replay_buffer.get_batch(batch_indices),
                     model=bot.model,
                     optimizer=optimizer,
                     scheduler=scheduler,
@@ -937,7 +965,7 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
             avg_loss = avg_pl + args.value_coef * avg_vl
             print(
                 f"  Loss: policy={avg_pl:.4f} value={avg_vl:.4f} total={avg_loss:.4f} "
-                f"buffer={len(buffer)} lr={optimizer.param_groups[0]['lr']:.6f} "
+                f"buffer={len(replay_buffer)} lr={optimizer.param_groups[0]['lr']:.6f} "
                 f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
             )
             if args.az_best_by == "loss" and avg_loss < best_loss:
@@ -946,7 +974,7 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
                 print(f"  -> saved best (by loss) to {args.save_best_path}")
         else:
             print(
-                f"  Buffer size {len(buffer)} too small; skipping train  "
+                f"  Buffer size {len(replay_buffer)} too small; skipping train  "
                 f"game_success_rate={game_success_rate:.2f}  [{game_type_log}]"
             )
 

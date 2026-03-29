@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from src.Bots.base_bot import BaseBot
 from src.game_datatypes import GameState
 from src.gomoku_game import get_legal_moves
-from src.mcts import run_mcts, run_mcts_with_policy
+from src.mcts import MCTSNode, run_mcts, run_mcts_with_policy
 from src.model_loader import (
     DEFAULT_WEIGHTS_PATH,
     load_weights,
@@ -263,8 +263,10 @@ class Bot(BaseBot):
         add_root_noise: bool = False,
         dirichlet_alpha: float = 0.3,
         dirichlet_epsilon: float = 0.25,
-    ) -> tuple[tuple[int, int], np.ndarray]:
-        return run_mcts_with_policy(
+        root: MCTSNode | None = None,
+        return_root: bool = False,
+    ) -> tuple[tuple[int, int], np.ndarray] | tuple[tuple[int, int], np.ndarray, MCTSNode | None]:
+        move, policy, next_root = run_mcts_with_policy(
             board,
             current_player,
             self.model,
@@ -278,7 +280,11 @@ class Bot(BaseBot):
             add_root_noise=add_root_noise,
             dirichlet_alpha=dirichlet_alpha,
             dirichlet_epsilon=dirichlet_epsilon,
+            root=root,
         )
+        if return_root:
+            return move, policy, next_root
+        return move, policy
 
     def move(self, game_state: GameState) -> tuple[int, int] | None:
         legal_moves = get_legal_moves(game_state.board)
