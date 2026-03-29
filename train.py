@@ -44,6 +44,13 @@ from src.Bots.dqn import (
 from src.model_loader import save_weights as save_model_weights, load_weights
 
 
+def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying module, stripping torch.compile's OptimizedModule wrapper if present.
+    This ensures state dicts are always saved with plain keys (no '_orig_mod.' prefix),
+    making checkpoints portable across compiled and non-compiled contexts."""
+    return model._orig_mod if hasattr(model, "_orig_mod") else model
+
+
 def _get_alphazero_impl(
     agent_type: str,
 ) -> tuple[type[torch.nn.Module], type[AlphaZeroResNetBot | AlphaZeroTransformerBot], str]:
@@ -664,7 +671,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                 worker_args.append(
                     (
                         w,
-                        {k: v.cpu().clone() for k, v in bot.model.state_dict().items()},
+                        {k.replace("_orig_mod.", ""): v.cpu().clone() for k, v in bot.model.state_dict().items()},
                         games_this_worker,
                         args.board_size,
                         args.num_simulations,
@@ -744,7 +751,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
             )
             if args.az_best_by == "loss" and avg_loss < best_loss:
                 best_loss = avg_loss
-                save_model_weights(bot.model, args.save_best_path)
+                save_model_weights(_unwrap_model(bot.model), args.save_best_path)
                 print(f"  -> saved best (by loss) to {args.save_best_path}")
         else:
             print(
@@ -779,13 +786,13 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
                 and eval_heuristic["win_rate"] > best_heuristic_wr
             ):
                 best_heuristic_wr = eval_heuristic["win_rate"]
-                save_model_weights(bot.model, args.save_best_path)
+                save_model_weights(_unwrap_model(bot.model), args.save_best_path)
                 print(f"  -> saved best (by heuristic) to {args.save_best_path}")
 
         # Save checkpoint every 5 iterations (and on last); used for league pool
         if iteration % 5 == 0 or iteration == total_display:
             ckpt_path = os.path.join(args.checkpoint_dir, f"checkpoint_{iteration}.pt")
-            save_model_weights(bot.model, ckpt_path)
+            save_model_weights(_unwrap_model(bot.model), ckpt_path)
             checkpoint_pool.append(ckpt_path)
             checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
             print(f"  -> checkpoint {ckpt_path}")
@@ -935,7 +942,7 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
             )
             if args.az_best_by == "loss" and avg_loss < best_loss:
                 best_loss = avg_loss
-                save_model_weights(bot.model, args.save_best_path)
+                save_model_weights(_unwrap_model(bot.model), args.save_best_path)
                 print(f"  -> saved best (by loss) to {args.save_best_path}")
         else:
             print(
@@ -970,12 +977,12 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
                 and eval_heuristic["win_rate"] > best_heuristic_wr
             ):
                 best_heuristic_wr = eval_heuristic["win_rate"]
-                save_model_weights(bot.model, args.save_best_path)
+                save_model_weights(_unwrap_model(bot.model), args.save_best_path)
                 print(f"  -> saved best (by heuristic) to {args.save_best_path}")
 
         if iteration % 5 == 0 or iteration == total_display:
             ckpt_path = os.path.join(args.checkpoint_dir, f"hybrid_checkpoint_{iteration}.pt")
-            save_model_weights(bot.model, ckpt_path)
+            save_model_weights(_unwrap_model(bot.model), ckpt_path)
             checkpoint_pool.append(ckpt_path)
             checkpoint_pool = checkpoint_pool[-args.league_pool_size:]
             print(f"  -> checkpoint {ckpt_path}")
