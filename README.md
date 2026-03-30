@@ -47,7 +47,19 @@ python main.py \
   --bot_kwargs '{"weights_path":"p0_ppo.pt","device":"cpu","deterministic":true}'
 ```
 
-Legacy/older-branch AlphaZero command (kept for compatibility with previous CLI variants):
+Current AlphaZero UI run:
+
+```bash
+python main.py --board_size 9 --bot_file alpha_zero_resnet --bot_name "AlphaZero ResNet" --weights_path best_weights/alphazero_best.pt --bot_kwargs "{\"num_simulations\": 200}"
+```
+
+Current Transformer UI run:
+
+```bash
+python main.py --board_size 9 --bot_file alpha_zero_transformer --bot_name "AlphaZero Transformer" --weights_path temp_weights/checkpoint_120.pt --bot_kwargs "{\"num_simulations\": 200}"
+```
+
+Legacy/older-branch AlphaZero command:
 
 ```bash
 python main.py --board_size 9 --agent_type alphazero-resnet --weights weights/checkpoint_165.pt
@@ -61,9 +73,10 @@ Training uses self-play plus optional games against a heuristic tactical bot and
 python train.py
 ```
 
-Optional arguments:
+Common arguments:
 
 - `--board_size` (default: 15)
+- `--agent_type` (`dqn`, `alphazero`, `alphazero-resnet`, `alphazero-transformer`, `hybrid`, `alphazero-hybrid`)
 - `--num_simulations` (default: 50) – MCTS simulations per move during self-play
 - `--games_per_iteration` (default: 100)
 - `--batch_size` (default: 64)
@@ -87,10 +100,15 @@ Optional arguments:
 - `--amp` – use FP16 autocast in MCTS for faster inference on GPU
 - `--num_workers` (default: 1) – number of parallel self-play workers (1 = no parallelism; workers run on CPU by default)
 - `--worker_device` (default: cpu) – device for parallel workers; main process keeps GPU for training
+- `--az_replay_buffer_size` – replay buffer capacity for AlphaZero and hybrid training
+- `--az_best_by` – AlphaZero/hybrid best-model criterion (`loss` or `heuristic`)
+- `--best_by` – DQN best-model criterion (`loss` or `heuristic`)
+- `--heuristic_win_bonus` – DQN-only reward shaping for wins vs heuristic
+- `--heuristic_prob_start`, `--heuristic_prob_decay_iters` – DQN curriculum controls
 
 **Note:** With PyTorch 2+, the model is compiled by default for faster inference. The first run after starting training may be slower due to tracing; later runs are faster. Use `--no-compile` to disable compilation.
 
-Training from scratch uses temperature and opponent diversity (heuristic + league) to improve tactics and reduce policy collapse. Checkpoints are saved every iteration (and used for the league pool); the best model (by loss) is saved to `save_best_path`. A progress line for the latest checkpoint is printed every 5 iterations.
+Training uses temperature and opponent diversity (heuristic + league) to improve tactics and reduce policy collapse. Checkpoints are saved regularly and can be reused for resume or league play.
 
 ## Model weights
 
@@ -100,7 +118,7 @@ Training from scratch uses temperature and opponent diversity (heuristic + leagu
 
 ## Evaluation
 
-Run standalone evaluation of a model (DQN or AlphaZero) vs random, heuristic, or AlphaZero:
+Run standalone evaluation of a model vs random, heuristic, DQN, or AlphaZero-family opponents:
 
 ```bash
 # DQN vs random (1000 games)
@@ -109,18 +127,21 @@ uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --oppon
 # DQN vs heuristic
 uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --opponent heuristic --num_games 1000 --board_size 9
 
-# DQN vs AlphaZero (requires opponent weights)
-uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --opponent alphazero --opponent_weights best_weights/alphazero_best.pt --num_games 1000 --board_size 9 --amp
+# DQN vs AlphaZero ResNet (requires opponent weights)
+uv run python evaluation.py --model weights/dqn_best.pt --agent_type dqn --opponent alphazero-resnet --opponent_weights best_weights/alphazero_best.pt --num_games 1000 --board_size 9 --amp
+
+# Hybrid vs DQN
+uv run python evaluation.py --model temp_weights/hybrid_checkpoint_120.pt --agent_type alphazero-hybrid --opponent dqn --opponent_weights best_weights/dqn_9_best.pt --num_games 1000 --board_size 9 --amp
 ```
 
-Options: `--model` (path), `--agent_type` (dqn | alphazero), `--opponent` (random | heuristic | alphazero), `--num_games`, `--board_size`, `--opponent_weights` (required when opponent is alphazero), `--amp`, `--num_simulations` (for AlphaZero MCTS), `--seed`.
+Options: `--model` or `--weights` (path), `--agent_type` (`dqn`, `alphazero`, `alphazero-resnet`, `alphazero-transformer`, `hybrid`, `alphazero-hybrid`), `--opponent` (`random`, `heuristic`, `dqn`, `alphazero`, `alphazero-resnet`, `alphazero-transformer`, `hybrid`, `alphazero-hybrid`), `--num_games`, `--board_size`, `--opponent_weights` for learned opponents, `--amp`, `--num_simulations`, `--seed`.
 
 ## Standardized API (cross-group testing)
 
 Create one bot and call `bot.predict()` for each board state (no reinitialisation):
 
 ```python
-from src.Bots.alpha_zero_transform import Bot
+from src.Bots.alpha_zero_resnet import Bot
 from src.model_loader import DEFAULT_WEIGHTS_PATH
 
 bot = Bot(weights_path=DEFAULT_WEIGHTS_PATH)  # or weights_path="path/to/weights.pt"
@@ -128,66 +149,84 @@ bot = Bot(weights_path=DEFAULT_WEIGHTS_PATH)  # or weights_path="path/to/weights
 move = bot.predict(board_state, current_player=0)  # (x, y); current_player optional if inferred
 ```
 
-One-off use: `predict(board_state, current_player=None, weights_path=..., **kwargs)` from `src.Bots.alpha_zero_transform`, or pass a pre-created `bot=...` to avoid creating a new one.
+You can do the same with `src.Bots.alpha_zero_transformer` or `src.Bots.alpha_zero_hybrid`, or pass a pre-created `bot=...` to avoid creating a new one.
 
 ## Project structure
 
 - `main.py` – Pygame game loop; launches the playable scene.
 - `train.py` – Self-play and training script (no UI).
-- `evaluation.py` – Standalone evaluation: model vs random/heuristic/AlphaZero over N games.
+- `evaluation.py` – Standalone evaluation for DQN and AlphaZero-family agents.
 - `src/game_logic.py` – Gomoku game logic and bot loading.
 - `src/gomoku_game.py` – Board helpers and win/draw detection.
 - `src/gomoku_utils.py` – Board-to-3-plane encoding for the network.
-- `src/mcts.py` – MCTS and policy target for training.
+- `src/mcts.py` – Python MCTS used by AlphaZero-family agents.
+- `src/alphazero_buffer.py` – compact replay buffer for AlphaZero and hybrid training.
 - `src/Bots/base_bot.py` – Abstract bot interface (`move(game_state)`).
-- `src/Bots/alpha_zero_transform.py` – Transformer policy/value model and AlphaZero bot; `bot.predict()` and module-level `predict()` API.
+- `src/Bots/alpha_zero_resnet.py` – ResNet AlphaZero model and bot wrapper.
+- `src/Bots/alpha_zero_transformer.py` – Transformer AlphaZero model and bot wrapper.
+- `src/Bots/alpha_zero_hybrid.py` – hybrid AlphaZero model and bot wrapper.
+- `src/Bots/dqn.py` – DQN model, replay buffer, self-play, and training helpers.
+- `src/Bots/dqn_bot.py` – DQN bot wrapper for gameplay.
+- `src/Bots/ppo_gomoku_model_15x15.py` – PPO UI wrapper.
 - `src/Bots/heuristic_tactical.py` – Heuristic tactical bot (win/block-4); used as an opponent during training.
 - `src/model_loader.py` – Default weights path, `save_weights()`, `load_weights()`.
 - `src/Bots/random.py` – Random-move bot.
+- `src/cpp/` – optional C++ MCTS extension sources.
 - `src/Scenes/` – Pygame scenes (game UI).
 
 ## Useful Commands
 
-Training from scratch (recommended: temperature + league + heuristic opponents):
+### AlphaZero baseline from scratch
 
 ```bash
 uv run python train.py --iterations 500 --num_simulations 200 --games_per_iteration 150 --learning_rate 2e-4 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.25 --heuristic_prob 0.2
 ```
 
-Resume from a checkpoint:
+### AlphaZero resume from checkpoint
 
 ```bash
 uv run python train.py --resume weights/checkpoint_100.pt --iterations 500 --value_coef 2.0 --num_simulations 100 --games_per_iteration 150 --learning_rate 2e-4
 ```
 
-alphazero:
-uv run python train.py --amp --num_workers 8 --iterations 500 --num_simulations 200 --games_per_iteration 150 --learning_rate 2e-4 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.25 --heuristic_prob 0.2 --resume weights/checkpoint_163.pt
+### AlphaZero 9x9 heuristic-focused resume
 
-uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 8 --iterations 500 --games_per_iteration 500 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.7 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25
-
-uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 8 --iterations 500 --games_per_iteration 500 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.7 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25
-
-uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 1 --worker_device cuda --no-compile --mcts_batch_size 64 --batch_size 128 --iterations 300 --games_per_iteration 200 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.4 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_635.pt
-
-^ the commands above collapsed the policy. weights are updating but the agent's policy is overly confident but has not meaningful effect. 
-
-
-Now I am running:
+```bash
 python train.py --board_size 9 --agent_type alphazero --amp --num_workers 8 --worker_device cuda --mcts_batch_size 128 --batch_size 512 --iterations 300 --games_per_iteration 400 --eval_games 200 --learning_rate 5e-4 --num_simulations 600 --value_coef 1.0 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.1 --heuristic_prob 0.5 --az_replay_buffer_size 240000 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_500.pt
+```
 
+### AlphaZero ResNet on Quadro RTX 6000
 
-AlphaZero on RTX Quadro 6000:
+```bash
 uv run python train.py --device cuda --board_size 9 --agent_type alphazero-resnet --amp --num_workers 12 --worker_device cpu --mcts_batch_size 64 --batch_size 1024 --iterations 300 --games_per_iteration 400 --eval_games 100 --learning_rate 5e-4 --num_simulations 800 --value_coef 1.0 --c_puct 1.5 --self_play_temp 1.0 --temp_moves 12 --league_prob 0.2 --heuristic_prob 0.15 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 100 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_115.pt
+```
 
+### AlphaZero settings that previously collapsed policy
 
-DQN:
-Initial:
+```bash
+uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 8 --iterations 500 --games_per_iteration 500 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.7 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25
+```
+
+```bash
+uv run python train.py --board_size 9 --agent_type alphazero --amp --num_workers 1 --worker_device cuda --no-compile --mcts_batch_size 64 --batch_size 128 --iterations 300 --games_per_iteration 200 --eval_games 200 --learning_rate 2e-4 --num_simulations 200 --value_coef 2.5 --c_puct 2.0 --self_play_temp 1.0 --temp_moves 30 --league_prob 0.2 --heuristic_prob 0.4 --az_best_by heuristic --az_eval_freq 10 --az_eval_games_best 200 --root_dirichlet_alpha 0.3 --root_dirichlet_epsilon 0.25 --resume weights/checkpoint_635.pt
+```
+
+### DQN 9x9 initial training
+
+```bash
 uv run python train.py --board_size 9 --agent_type dqn --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --league_prob 0.25 --heuristic_prob 0.2
+```
 
-After 100% random success
+### DQN after 100% random success
+
+```bash
 uv run python train.py --board_size 9 --agent_type dqn --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --league_prob 0.2 --heuristic_prob 0.6 --resume weights/dqn_checkpoint_1030.pt
+```
 
+### DQN heuristic-focused fine-tune
+
+```bash
 uv run python train.py --board_size 9 --agent_type dqn --best_by heuristic --amp --num_workers 8 --iterations 2000 --games_per_iteration 1000 --eval_games 200 --learning_rate 2e-4 --gamma 0.99 --replay_buffer_size 100000 --league_prob 0.2 --heuristic_prob 0.3 --heuristic_win_bonus 0.2 --heuristic_prob_start 1 --heuristic_prob_decay_iters 500 --resume weights/dqn_checkpoint_290.pt
+```
 
 ### DQN training tips
 
