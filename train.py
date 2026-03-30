@@ -529,6 +529,7 @@ def main() -> None:
     parser.add_argument("--temp_moves", type=int, default=30, help="Number of moves per game with temperature; after that argmax")
     parser.add_argument("--league_prob", type=float, default=0.25, help="Probability of playing vs a past checkpoint")
     parser.add_argument("--heuristic_prob", type=float, default=0.2, help="Probability of playing vs heuristic tactical bot")
+    parser.add_argument("--az_replay_buffer_size", type=int, default=160000, help="Replay buffer capacity for AlphaZero and hybrid training")
     parser.add_argument("--league_pool_size", type=int, default=5, help="Max past checkpoints to keep in league pool")
     parser.add_argument("--amp", action="store_true", help="Use FP16 autocast in MCTS")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of parallel self-play workers (1 = no parallelism)")
@@ -616,7 +617,7 @@ def _run_alphazero_training(args: argparse.Namespace, device: torch.device) -> N
     optimizer = torch.optim.Adam(bot.model.parameters(), lr=args.learning_rate)
 
     replay_buffer = AlphaZeroReplayBuffer(
-        capacity=args.games_per_iteration * 200,
+        capacity=args.az_replay_buffer_size,
         board_size=args.board_size,
     )
     best_loss = float("inf")
@@ -873,7 +874,7 @@ def _run_hybrid_training(args: argparse.Namespace, device: torch.device) -> None
     )
 
     replay_buffer = AlphaZeroReplayBuffer(
-        capacity=args.games_per_iteration * 200,
+        capacity=args.az_replay_buffer_size,
         board_size=args.board_size,
     )
     best_loss = float("inf")

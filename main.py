@@ -4,46 +4,48 @@ from src.window import Window
 
 FPS = 60
 
-
 def main():
-    parser = argparse.ArgumentParser(description="Gomoku game (player vs AlphaZero)")
+    parser = argparse.ArgumentParser(description="Gomoku UI")
+    parser.add_argument("--board_size", type=int, default=15, choices=[9, 15])
     parser.add_argument(
-        "--agent_type",
+        "--bot_file",
         type=str,
-        default=None,
-        choices=[
-            "alphazero",
-            "alphazero-resnet",
-            "alphazero-transformer",
-            "hybrid",
-            "alphazero-hybrid",
-            "dqn",
-        ],
-        help="Bot type to load for the AI opponent. If omitted, infer from --weights when possible and default to alphazero-resnet.",
+        default="ppo_gomoku_model_15x15",
+        help="Bot module file in src/Bots without .py (e.g. ppo_gomoku_model_15x15, random)",
+    )
+    parser.add_argument("--bot_name", type=str, default="PPO Bot")
+    parser.add_argument(
+        "--weights_path",
+        type=str,
+        default="p0_ppo.pt",
+        help="Optional checkpoint path passed to bot as weights_path",
     )
     parser.add_argument(
-        "--weights",
+        "--bot_kwargs",
         type=str,
-        default=None,
-        help="Path to checkpoint. Use weights/best.pt for AlphaZero or weights/dqn_best.pt for DQN. Auto-detects model from path.",
-    )
-    parser.add_argument(
-        "--board_size",
-        type=int,
-        default=15,
-        choices=[9, 15],
-        help="Board size (must be 9 or 15)",
+        default="{}",
+        help='Extra JSON kwargs for bot constructor, e.g. \'{"num_simulations":500}\'',
     )
     args = parser.parse_args()
 
+    import json
+
+    try:
+        bot_kwargs = json.loads(args.bot_kwargs)
+        if not isinstance(bot_kwargs, dict):
+            raise ValueError("bot_kwargs must decode to a JSON object")
+    except Exception as exc:
+        raise ValueError(f"Invalid --bot_kwargs JSON: {exc}") from exc
+
     window = Window(
-        720,
-        720,
-        "Game",
-        "game",
-        weights_path=args.weights,
+        width=720,
+        height=720,
+        current_scene="game",
         board_size=args.board_size,
-        agent_type=args.agent_type,
+        bot_file=args.bot_file,
+        bot_name=args.bot_name,
+        weights_path=args.weights_path,
+        bot_kwargs=bot_kwargs,
     )
 
     while window.running:

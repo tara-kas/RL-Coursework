@@ -9,9 +9,11 @@ class Window():
         height: int = 720,
         title: str = "Game",
         current_scene: str = "game",
-        weights_path: str | None = None,
         board_size: int = 15,
-        agent_type: str | None = None,
+        bot_file: str = "random",
+        bot_name: str = "Opponent",
+        weights_path: str | None = None,
+        bot_kwargs: dict | None = None,
     ):
         pygame.init()
         self.running = True
@@ -36,9 +38,11 @@ class Window():
         self.scenes = {
             "game": GameScene(
                 self.scene_manager,
-                weights_path=weights_path,
                 board_size=board_size,
-                agent_type=agent_type,
+                bot_file=bot_file,
+                bot_name=bot_name,
+                weights_path=weights_path,
+                bot_kwargs=bot_kwargs,
             )
         }
 
