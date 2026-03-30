@@ -1,6 +1,14 @@
 # RL-Coursework
 
-Reinforcement Learning Coursework: Gomoku (15×15) with an AlphaZero-style self-play trained agent.
+Reinforcement Learning Coursework: Gomoku (15×15) with multiple agents (AlphaZero, PPO, DQN, heuristic, random).
+
+## Recent updates (main branch)
+
+- `main.py` currently uses bot-module args (`--bot_file`, `--bot_kwargs`) and defaults to a **player vs PPO** setup.
+- PPO checkpoints in root:
+  - `p0_ppo.pt`
+  - `p1_ppo.pt`
+- PPO wrapper now degrades gracefully: if PPO dependencies/checkpoint are missing, it falls back to a tactical bot so the UI can still run outside a shared venv.
 
 ## Requirements
 
@@ -9,26 +17,42 @@ Reinforcement Learning Coursework: Gomoku (15×15) with an AlphaZero-style self-
 - NumPy
 - Pygame (for the game UI only; training runs headless)
 
+Optional packages for PPO backend:
+- omegaconf
+- tensordict
+- torchrl
+- hydra-core
+
 Install dependencies (example with pip):
 
 ```bash
-pip install torch numpy pygame
+pip install torch numpy pygame omegaconf tensordict torchrl hydra-core
 ```
 
 ## Running the game
 
-Play against the AlphaZero bot in a 15×15 Gomoku window:
+Current default UI run (player vs PPO):
 
 ```bash
 python main.py
 ```
 
-The game loads the trained model from `weights/best.pt` if present; otherwise the bot uses an untrained (random-initialized) network.
+Explicit PPO run:
 
-Play against a specific agent type, board size, and weight file.
+```bash
+python main.py \
+  --board_size 15 \
+  --bot_file ppo_gomoku_model_15x15 \
+  --bot_name PPO \
+  --bot_kwargs '{"weights_path":"p0_ppo.pt","device":"cpu","deterministic":true}'
+```
+
+Legacy/older-branch AlphaZero command (kept for compatibility with previous CLI variants):
+
 ```bash
 python main.py --board_size 9 --agent_type alphazero-resnet --weights weights/checkpoint_165.pt
 ```
+
 ## Training (no UI)
 
 Training uses self-play plus optional games against a heuristic tactical bot and past checkpoints (league). Run from the project root:
