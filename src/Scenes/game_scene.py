@@ -1,4 +1,3 @@
-import os
 import pygame
 import math
 import numpy as np
@@ -7,7 +6,6 @@ import random
 from src.Scenes.scene import Scene
 from src.scene_manager import SceneManager
 from src.game_logic import GameLogic
-from src.model_loader import DEFAULT_WEIGHTS_PATH
 
 COLOURS = {
     "bg_dark": (28, 26, 31),
@@ -28,9 +26,11 @@ class GameScene(Scene):
     def __init__(
         self,
         scene_manager: SceneManager,
-        weights_path: str | None = None,
         board_size: int = 15,
-        agent_type: str | None = None,
+        bot_file: str = "random",
+        bot_name: str = "Opponent",
+        weights_path: str | None = None,
+        bot_kwargs: dict | None = None,
     ):
         super().__init__(scene_manager)
         
@@ -49,9 +49,9 @@ class GameScene(Scene):
         self.grid_x = board_size
         self.grid_y = board_size
         
-        # Playable grid in the middle
-        num_gaps = self.grid_x - 1
-        num_slots = num_gaps + 2   # slots for grid and margin
+        # 15x15 playable grid in the middle
+        num_gaps = self.grid_x - 1  # 14 gaps between 15 intersections
+        num_slots = num_gaps + 2   # 16 slots for grid and margin
         
         self.board_padding = 14
         
@@ -79,46 +79,17 @@ class GameScene(Scene):
             play_h + 2 * self.board_padding,
         )
         
-        # Playable grid is inset by one tile from the board surface (not on the outline)
+        # Playable 15x15 grid is inset by one tile from the board surface (not on the outline)
         self.top_x = self.play_top_x + tile_size
         self.top_y = self.play_top_y + tile_size
         self.bottom_x = self.top_x + num_gaps * tile_size
         self.bottom_y = self.top_y + num_gaps * tile_size
 
-        weights = weights_path if weights_path is not None else DEFAULT_WEIGHTS_PATH
-
-        inferred_agent_type = agent_type
-        if inferred_agent_type is None:
-            basename = os.path.basename(weights).lower() if weights else ""
-            if "dqn" in basename:
-                inferred_agent_type = "dqn"
-            elif "transformer" in basename:
-                inferred_agent_type = "alphazero-transformer"
-            elif "hybrid" in basename:
-                inferred_agent_type = "alphazero-hybrid"
-            else:
-                inferred_agent_type = "alphazero-resnet"
-
-        bot_module_by_agent = {
-            "dqn": "dqn",
-            "alphazero": "alpha_zero_resnet",
-            "alphazero-resnet": "alpha_zero_resnet",
-            "alphazero-transformer": "alpha_zero_transformer",
-            "hybrid": "alpha_zero_hybrid",
-            "alphazero-hybrid": "alpha_zero_hybrid",
-        }
-        bot_label_by_agent = {
-            "dqn": "DQN",
-            "alphazero": "AlphaZero ResNet",
-            "alphazero-resnet": "AlphaZero ResNet",
-            "alphazero-transformer": "AlphaZero Transformer",
-            "hybrid": "AlphaZero Hybrid",
-            "alphazero-hybrid": "AlphaZero Hybrid",
-        }
-        bot_file = bot_module_by_agent.get(inferred_agent_type, "alpha_zero_resnet")
-        bot_name = bot_label_by_agent.get(inferred_agent_type, "AlphaZero ResNet")
-
-        bot_kwargs: dict[str, object] = {"weights_path": weights, "board_size": board_size}
+        final_bot_kwargs = dict(bot_kwargs or {})
+        if weights_path is not None and "weights_path" not in final_bot_kwargs:
+            final_bot_kwargs["weights_path"] = weights_path
+        if "board_size" not in final_bot_kwargs:
+            final_bot_kwargs["board_size"] = board_size
 
         users = [
             {"type": "player", "name": "player1", "colour": (0,0,255)},
@@ -127,10 +98,10 @@ class GameScene(Scene):
                 "name": bot_name,
                 "file": bot_file,
                 "colour": (255,0,0),
-                "bot_kwargs": bot_kwargs,
+                "bot_kwargs": final_bot_kwargs,
             },
         ]
-        self.game_logic = GameLogic(grid_x=board_size, grid_y=board_size, users=users)
+        self.game_logic = GameLogic(users=users)
         
         self.mouse_x = 0
         self.mouse_y = 0
@@ -140,13 +111,33 @@ class GameScene(Scene):
         self.font_small = pygame.font.Font("assets/fonts/Pixelify_Sans/static/PixelifySans-Regular.ttf", max(11, self.font_size - 2))
 
     def handle_events(self, events: list[pygame.event.Event]):
+        for event in events:
+            if hasattr(event, "pos"):
+                self.mouse_x, self.mouse_y = event.pos
+
+            if (
+                event.type == pygame.KEYDOWN
+                and event.key == pygame.K_r
+                and self.game_logic.game_over
+            ):
+                self.game_logic.reset_game()
+                return
+
+        if self.game_logic.game_over:
+            return
+
         if self.game_logic.users[self.game_logic.current_turn]["type"] == "bot":
             bot_name = self.game_logic.users[self.game_logic.current_turn]["name"]
             move = self.game_logic.get_bot_move(bot_name)
 
-            if move is not None and self.game_logic.check_valid_move(move):
+            if move is None:
+                print(f"Bot '{bot_name}' returned no move. Check bot_file/weights configuration.")
+            elif self.game_logic.check_valid_move(move):
                 self.game_logic.make_move(self.game_logic.current_turn, move)
-                self.game_logic.next_turn()
+                if not self.game_logic.game_over:
+                    self.game_logic.next_turn()
+            else:
+                print(f"Bot '{bot_name}' returned invalid move: {move}")
         
         for event in events:
             if hasattr(event, "pos"):
@@ -163,7 +154,8 @@ class GameScene(Scene):
                     
                     if self.game_logic.check_valid_move((grid_x, grid_y)):
                         self.game_logic.make_move(self.game_logic.current_turn, (grid_x, grid_y))
-                        self.game_logic.next_turn()
+                        if not self.game_logic.game_over:
+                            self.game_logic.next_turn()
 
     def update(self):
         pass
@@ -286,8 +278,20 @@ class GameScene(Scene):
             text_surf = self.font_small.render(f"{name} ({type})", True, text_colour)
             screen.blit(text_surf, (badge_rect.x + 28, badge_rect.centery - text_surf.get_height() // 2))
             start_x += badge_w + gap
+
+        if self.game_logic.game_over:
+            if self.game_logic.winner is None:
+                status_text = "Game over: Draw"
+            else:
+                winner_name = self.game_logic.users[self.game_logic.winner]["name"]
+                status_text = f"Game over: {winner_name} wins"
+            status_surface = self.font_small.render(status_text, True, COLOURS["ui_turn_glow"])
+            hint_surface = self.font_small.render("Press R to replay", True, COLOURS["ui_text"])
+            status_x = screen.get_width() - self.padding_x_R - max(status_surface.get_width(), hint_surface.get_width())
+            screen.blit(status_surface, (status_x, 8))
+            screen.blit(hint_surface, (status_x, 8 + status_surface.get_height() + 2))
             
-        if self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
+        if (not self.game_logic.game_over) and self.game_logic.users[self.game_logic.current_turn]["type"] == "player":
             self.draw_hover_effects(self.mouse_x, self.mouse_y)
 
     def draw_hover_effects(self, mouse_x: int, mouse_y: int):
