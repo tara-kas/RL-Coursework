@@ -6,6 +6,8 @@ import random
 
 import numpy as np
 
+from src.Bots.base_bot import BaseBot
+from src.game_datatypes import GameState
 from src.gomoku_game import WIN, get_legal_moves, apply_move, get_game_result
 
 
@@ -110,3 +112,21 @@ def predict(board: np.ndarray, current_player: int) -> tuple[int, int]:
 
     # otherwise random
     return random.choice(legal)
+
+
+class Bot(BaseBot):
+    def __init__(self):
+        super().__init__()
+
+    def move(self, game_state: GameState) -> tuple[int, int] | None:
+        legal = get_legal_moves(game_state.board)
+        if not legal:
+            return None
+
+        current_player = game_state.current_player
+        if current_player is None:
+            count_0 = int(np.sum(game_state.board == 0))
+            count_1 = int(np.sum(game_state.board == 1))
+            current_player = 0 if count_0 <= count_1 else 1
+
+        return predict(game_state.board.copy(), int(current_player))
