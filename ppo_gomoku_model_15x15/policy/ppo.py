@@ -112,15 +112,7 @@ class PPO:
         # print(f"actor params:{count_parameters(self.actor)}")
         # print(f"critic params:{count_parameters(self.critic)}")
 
-        self.loss_module = ClipPPOLoss(
-            actor=self.actor,
-            critic=self.critic,
-            clip_epsilon=self.clip_param,
-            entropy_bonus=bool(self.entropy_coef),
-            entropy_coef=self.entropy_coef,
-            normalize_advantage=self.cfg.get("normalize_advantage", True),
-            loss_critic_type="smooth_l1",
-        )
+        self.loss_module = self._build_loss_module()
 
         self.optim = get_optimizer(self.cfg.optimizer, self.loss_module.parameters())
 
@@ -222,15 +214,7 @@ class PPO:
         self.critic.load_state_dict(state_dict["critic"], strict=False)
         self.actor.load_state_dict(state_dict["actor"])
 
-        self.loss_module = ClipPPOLoss(
-            actor=self.actor,
-            critic=self.critic,
-            clip_epsilon=self.clip_param,
-            entropy_bonus=bool(self.entropy_coef),
-            entropy_coef=self.entropy_coef,
-            normalize_advantage=self.cfg.get("normalize_advantage", True),
-            loss_critic_type="smooth_l1",
-        )
+        self.loss_module = self._build_loss_module()
 
         self.optim = get_optimizer(self.cfg.optimizer, self.loss_module.parameters())
 
@@ -241,3 +225,19 @@ class PPO:
     def eval(self):
         self.actor.eval()
         self.critic.eval()
+
+    def _build_loss_module(self):
+        kwargs = {
+            "actor": self.actor,
+            "critic": self.critic,
+            "clip_epsilon": self.clip_param,
+            "entropy_bonus": bool(self.entropy_coef),
+            "normalize_advantage": self.cfg.get("normalize_advantage", True),
+            "loss_critic_type": "smooth_l1",
+        }
+        try:
+            # torchrl<=0.10
+            return ClipPPOLoss(entropy_coef=self.entropy_coef, **kwargs)
+        except TypeError:
+            # torchrl>=0.11
+            return ClipPPOLoss(entropy_coeff=self.entropy_coef, **kwargs)

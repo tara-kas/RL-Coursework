@@ -10,14 +10,14 @@ def main():
     parser.add_argument(
         "--bot_file",
         type=str,
-        default="random",
-        help="Bot module file in src/Bots without .py (e.g. random, dqn_bot, mcts_tactical)",
+        default="ppo_gomoku_model_15x15",
+        help="Bot module file in src/Bots without .py (e.g. ppo_gomoku_model_15x15, random)",
     )
-    parser.add_argument("--bot_name", type=str, default="Opponent")
+    parser.add_argument("--bot_name", type=str, default="PPO Bot")
     parser.add_argument(
         "--weights_path",
         type=str,
-        default=None,
+        default="p0_ppo.pt",
         help="Optional checkpoint path passed to bot as weights_path",
     )
     parser.add_argument(

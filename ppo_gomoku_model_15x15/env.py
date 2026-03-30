@@ -1,12 +1,22 @@
 from tensordict import TensorDict
 import torch
 
-from torchrl.data.tensor_specs import (
-    CompositeSpec,
-    DiscreteTensorSpec,
-    BinaryDiscreteTensorSpec,
-    UnboundedContinuousTensorSpec,
-)
+try:
+    # Older torchrl API.
+    from torchrl.data.tensor_specs import (
+        CompositeSpec,
+        DiscreteTensorSpec,
+        BinaryDiscreteTensorSpec,
+        UnboundedContinuousTensorSpec,
+    )
+except ImportError:
+    # torchrl>=0.11 renamed these classes.
+    from torchrl.data.tensor_specs import (
+        Composite as CompositeSpec,
+        Categorical as DiscreteTensorSpec,
+        Binary as BinaryDiscreteTensorSpec,
+        UnboundedContinuous as UnboundedContinuousTensorSpec,
+    )
 from .core import Gomoku
 
 class GomokuEnv:
