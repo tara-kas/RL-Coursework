@@ -134,6 +134,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
+        "--weights",
+        dest="model",
         type=str,
         required=True,
         help="Path to model weights (DQN or AlphaZero depending on --agent_type)",
