@@ -1,6 +1,8 @@
 # RL-Coursework
 
-![](https://github.com/tara-kas/RL-Coursework/assets/gameplay.gif)
+<p align="center">
+  <img src="/assets/gameplay.gif" width="50%">
+</p>
 
 Reinforcement Learning Coursework: Gomoku (15×15) with multiple agents (AlphaZero, PPO, DQN, heuristic, random).
 
